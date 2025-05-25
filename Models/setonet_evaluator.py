@@ -4,12 +4,134 @@ from tqdm import tqdm
 from Data.data_utils import generate_batch
 from .utils.helper_utils import calculate_l2_relative_error, prepare_setonet_inputs
 
-def evaluate_setonet_models(setonet_model_T, setonet_model_T_inv, eval_params, device):
+def evaluate_setonet_model(setonet_model, eval_params, device):
     """
-    Evaluates both SetONet models on test data.
+    Evaluates a SetONet model on test data.
+    
+    Args:
+        setonet_model: Trained SetONet model
+        eval_params: Dictionary with evaluation parameters
+        device: PyTorch device
     
     Returns:
-        tuple: (avg_rel_error_T, avg_rel_error_T_inv)
+        dict: Evaluation results
+    """
+    setonet_model.eval()
+    
+    # Extract evaluation parameters
+    sensor_x_original = eval_params['sensor_x_original']
+    scale = eval_params['scale']
+    input_range = eval_params['input_range']
+    batch_size_train = eval_params['batch_size_train']
+    n_trunk_points_eval = eval_params['n_trunk_points_eval']
+    sensor_size = eval_params['sensor_size']
+    n_test_samples_eval = eval_params['n_test_samples_eval']
+    benchmark = eval_params['benchmark']
+    variable_sensors = eval_params.get('variable_sensors', False)
+    
+    total_l2_error = 0.0
+    n_batches = (n_test_samples_eval + batch_size_train - 1) // batch_size_train
+    
+    print(f"\n--- Evaluating {benchmark.title()} Model ---")
+    
+    with torch.no_grad():
+        for batch_idx in tqdm(range(n_batches), desc="Evaluating"):
+            current_batch_size = min(batch_size_train, n_test_samples_eval - batch_idx * batch_size_train)
+            
+            # Generate test batch with same sensor configuration as training
+            if variable_sensors:
+                batch_data = generate_batch(
+                    batch_size=current_batch_size,
+                    n_trunk_points=n_trunk_points_eval,
+                    sensor_x=None,
+                    scale=scale,
+                    input_range=input_range,
+                    device=device,
+                    constant_zero=True,
+                    variable_sensors=True,
+                    sensor_size=sensor_size
+                )
+                f_at_sensors_test, _, _, f_prime_at_trunk_test, batch_x_eval_points_test, sensor_x_batch = batch_data
+            else:
+                f_at_sensors_test, _, _, f_prime_at_trunk_test, batch_x_eval_points_test = generate_batch(
+                    batch_size=current_batch_size,
+                    n_trunk_points=n_trunk_points_eval,
+                    sensor_x=sensor_x_original,
+                    scale=scale,
+                    input_range=input_range,
+                    device=device,
+                    constant_zero=True,
+                    variable_sensors=False
+                )
+            
+            # Prepare inputs and get predictions based on benchmark
+            if benchmark == 'derivative':
+                if variable_sensors:
+                    # Use the sensor locations generated for this batch
+                    xs, us, ys = prepare_setonet_inputs(
+                        sensor_x_batch,
+                        current_batch_size,
+                        f_at_sensors_test.unsqueeze(-1),
+                        batch_x_eval_points_test,
+                        sensor_size
+                    )
+                else:
+                    xs, us, ys = prepare_setonet_inputs(
+                        sensor_x_original,
+                        current_batch_size,
+                        f_at_sensors_test.unsqueeze(-1),
+                        batch_x_eval_points_test,
+                        sensor_size
+                    )
+                
+                pred = setonet_model(xs, us, ys)
+                pred = pred.squeeze(-1)  # [current_batch_size, n_trunk_points_eval]
+                target = f_prime_at_trunk_test.T  # [current_batch_size, n_trunk_points_eval]
+                
+            elif benchmark == 'integral':
+                if variable_sensors:
+                    # Use the sensor locations generated for this batch
+                    xs, us, ys = prepare_setonet_inputs(
+                        batch_x_eval_points_test,
+                        current_batch_size,
+                        f_prime_at_trunk_test.T.unsqueeze(-1),
+                        sensor_x_batch,
+                        n_trunk_points_eval
+                    )
+                else:
+                    xs, us, ys = prepare_setonet_inputs(
+                        batch_x_eval_points_test,
+                        current_batch_size,
+                        f_prime_at_trunk_test.T.unsqueeze(-1),
+                        sensor_x_original,
+                        n_trunk_points_eval
+                    )
+                
+                pred = setonet_model(xs, us, ys)
+                pred = pred.squeeze(-1)  # [current_batch_size, sensor_size]
+                target = f_at_sensors_test  # [current_batch_size, sensor_size]
+            
+            # Calculate L2 relative error for this batch
+            batch_l2_error = calculate_l2_relative_error(pred, target)
+            total_l2_error += batch_l2_error.item() * current_batch_size
+    
+    # Calculate average L2 relative error
+    avg_l2_error = total_l2_error / n_test_samples_eval
+    
+    print(f"Final L2 relative error ({benchmark}): {avg_l2_error:.6f}")
+    
+    return {
+        'final_l2_relative_error': avg_l2_error,
+        'benchmark_task': benchmark,
+        'n_test_samples': n_test_samples_eval,
+        'variable_sensors_used': variable_sensors
+    }
+
+# Keep the old function for backward compatibility
+def evaluate_setonet_models(setonet_model_T, setonet_model_T_inv, eval_params, device):
+    """
+    Legacy function for backward compatibility.
+    Evaluates both SetONet models on test data.
     """
     print("\n--- Evaluating Models ---")
     

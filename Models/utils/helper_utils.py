@@ -52,3 +52,58 @@ def prepare_setonet_inputs(sensor_x_global, current_batch_size, batch_f_values_n
     ys_setonet = batch_x_eval_norm.view(1, num_trunk_points, 1).expand(_current_batch_size_int, -1, -1)
     
     return xs_setonet, us_setonet, ys_setonet
+
+def prepare_setonet_inputs_variable(sensor_x_batch, batch_f_values, trunk_x, sensor_size):
+    """
+    Prepare SetONet inputs for variable sensor locations (batched).
+    
+    Args:
+        sensor_x_batch: [batch_size, sensor_size, 1] - different sensors per sample
+        batch_f_values: [batch_size, sensor_size, 1] - function values at sensors
+        trunk_x: [n_trunk_points, 1] - trunk evaluation points (same for all)
+        sensor_size: number of sensor points
+    
+    Returns:
+        xs, us, ys for SetONet input
+    """
+    batch_size = sensor_x_batch.shape[0]
+    n_trunk_points = trunk_x.shape[0]
+    
+    # Expand trunk points for all samples
+    trunk_x_expanded = trunk_x.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, n_trunk_points, 1]
+    
+    # Prepare xs: sensor locations for each sample
+    xs = sensor_x_batch  # [batch_size, sensor_size, 1]
+    
+    # Prepare us: function values at sensors
+    us = batch_f_values  # [batch_size, sensor_size, 1]
+    
+    # Prepare ys: trunk evaluation points
+    ys = trunk_x_expanded  # [batch_size, n_trunk_points, 1]
+    
+    return xs, us, ys
+
+def prepare_setonet_inputs_variable_integral(trunk_x_batch, batch_f_prime_values, sensor_x_batch):
+    """
+    Prepare SetONet inputs for variable sensor locations in integral case (batched).
+    
+    Args:
+        trunk_x_batch: [batch_size, n_trunk_points, 1] - trunk points (same for all samples)
+        batch_f_prime_values: [batch_size, n_trunk_points, 1] - derivative values at trunk points
+        sensor_x_batch: [batch_size, sensor_size, 1] - different sensor locations per sample
+    
+    Returns:
+        xs, us, ys for SetONet input
+    """
+    # For integral: trunk points are branch inputs, sensor locations are trunk queries
+    
+    # Prepare xs: trunk locations (branch input)
+    xs = trunk_x_batch  # [batch_size, n_trunk_points, 1]
+    
+    # Prepare us: derivative values at trunk points
+    us = batch_f_prime_values  # [batch_size, n_trunk_points, 1]
+    
+    # Prepare ys: sensor locations (trunk queries)
+    ys = sensor_x_batch  # [batch_size, sensor_size, 1]
+    
+    return xs, us, ys

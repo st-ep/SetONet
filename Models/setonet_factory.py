@@ -3,12 +3,60 @@ import torch.nn as nn
 import os
 from .SetONet import SetONet
 
-def create_setonet_models(args, device):
+def create_setonet_model(args, device):
     """
-    Creates and initializes SetONet models (T and T_inv) based on arguments.
+    Creates and initializes a single SetONet model based on arguments.
     
     Returns:
-        tuple: (setonet_model_T, setonet_model_T_inv)
+        SetONet: The initialized model
+    """
+    print(f"\n--- Initializing SetONet Model for {args.benchmark} ---")
+    
+    # SetONet model arguments
+    setonet_args = dict(
+        input_size_src=1,
+        output_size_src=1,
+        input_size_tgt=1,
+        output_size_tgt=1,
+        p=args.son_p_dim,
+        phi_hidden_size=args.son_phi_hidden,
+        rho_hidden_size=args.son_rho_hidden,
+        trunk_hidden_size=args.son_trunk_hidden,
+        n_trunk_layers=args.son_n_trunk_layers,
+        activation_fn=nn.Tanh,
+        use_deeponet_bias=True,
+        phi_output_size=args.son_phi_output_size,
+        pos_encoding_type=args.pos_encoding_type,
+        aggregation_type=args.son_aggregation,
+    )
+
+    setonet_model = SetONet(**setonet_args).to(device)
+    
+    return setonet_model
+
+def load_pretrained_model(setonet_model, args, device):
+    """
+    Loads a pre-trained model if path is provided.
+    
+    Returns:
+        bool: True if model was loaded, False otherwise
+    """
+    if args.load_model_path:
+        if os.path.exists(args.load_model_path):
+            setonet_model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            print(f"Loaded pre-trained SetONet model from: {args.load_model_path}")
+            return True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
+            args.load_model_path = None
+    
+    return False
+
+# Keep the old functions for backward compatibility
+def create_setonet_models(args, device):
+    """
+    Legacy function for backward compatibility.
+    Creates and initializes SetONet models (T and T_inv) based on arguments.
     """
     print("\n--- Initializing SetONet Models (Forward T and Inverse T_inv) ---")
     
@@ -40,10 +88,8 @@ def create_setonet_models(args, device):
 
 def load_pretrained_models(setonet_model_T, setonet_model_T_inv, args, device):
     """
+    Legacy function for backward compatibility.
     Loads pre-trained models if paths are provided.
-    
-    Returns:
-        bool: True if both models were loaded, False otherwise
     """
     models_loaded = False
     
