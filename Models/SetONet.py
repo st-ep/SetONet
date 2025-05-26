@@ -3,6 +3,7 @@ import torch.nn as nn
 from FunctionEncoder import BaseDataset, BaseCallback # Keep BaseDataset/Callback if used
 from tqdm import trange
 from torch.optim.lr_scheduler import _LRScheduler # Import base class for type hinting if needed
+from .utils.attention_pool import AttentionPool, StatisticalPool, HybridAttentionPool, SpecializedAttentionPool
 
 # This implements a DeepOSet using PyTorch
 class SetONet(torch.nn.Module):
@@ -28,8 +29,15 @@ class SetONet(torch.nn.Module):
                  pos_encoding_type='skip', # Type: 'sinusoidal', or 'skip'
                  pos_encoding_max_freq=1.0, # Max frequency/scale for sinusoidal encoding
                  encoding_strategy='concatenate', # Strategy for combining positional and sensor features. Only 'concatenate' is supported.
-                 aggregation_type: str = "mean",  # 'mean' or 'attention'
-                 attention_n_tokens: int = 1,     # k – number of learnable query tokens
+                 aggregation_type: str = "attention",  # 'mean', 'attention', 'statistical', 'hybrid', 'specialized'
+                 attention_n_tokens: int = 4,     # k – number of learnable query tokens
+                 statistical_features: list = None,  # Which statistical features to use ['mean', 'std', 'min', 'max', 'median', 'sum']
+                 statistical_fusion: str = 'basic',  # How to combine statistical features: 'basic', 'structured', 'scale_aware'
+                 statistical_fusion_strategy: str = 'separate_then_combine',  # Strategy for structured fusion
+                 hybrid_combine_strategy: str = 'concat',  # For hybrid: 'concat', 'learned', 'weighted'
+                 attention_specializations: list = None,  # For specialized attention: ['general', 'extreme', 'variance', 'local']
+                 use_specialization_loss: bool = False,  # Whether to add specialization regularization
+                 specialization_loss_weight: float = 0.01,  # Weight for specialization loss
                  ):
         super().__init__()
 
@@ -53,19 +61,81 @@ class SetONet(torch.nn.Module):
         self.n_trunk_layers = n_trunk_layers
 
         # ---------------------------------------------------------------------
-        # Aggregation choice ('mean' | 'attention')
+        # Aggregation choice ('mean' | 'attention' | 'statistical' | 'hybrid' | 'specialized')
         # ---------------------------------------------------------------------
         self.aggregation = aggregation_type.lower()
-        if self.aggregation not in ["mean", "attention"]:
-            raise ValueError("aggregation_type must be either 'mean' or 'attention'")
+        valid_aggregations = ["mean", "attention", "statistical", "hybrid", "specialized"]
+        if self.aggregation not in valid_aggregations:
+            raise ValueError(f"aggregation_type must be one of {valid_aggregations}")
+        
         self.attention_n_tokens = attention_n_tokens
         self.attention_n_heads = 4 # Default or make configurable if needed
+        self.use_specialization_loss = use_specialization_loss
+        self.specialization_loss_weight = specialization_loss_weight
 
+        # Store statistical fusion parameters for getattr access
+        self.statistical_fusion = statistical_fusion
+        self.statistical_fusion_strategy = statistical_fusion_strategy
+
+        # Set up pooling based on aggregation type
         if self.aggregation == "attention":
-            from .utils.attention_pool import AttentionPool
             self.pool = AttentionPool(phi_output_size,
-                                      n_heads=4,
+                                      n_heads=self.attention_n_heads,
                                       n_tokens=self.attention_n_tokens)
+            pool_output_dim = self.attention_n_tokens * phi_output_size
+            
+        elif self.aggregation == "statistical":
+            if statistical_features is None:
+                statistical_features = ['mean', 'std', 'min', 'max']
+            
+            # Choose which statistical pool to use
+            statistical_fusion = getattr(self, 'statistical_fusion', 'basic')  # Default to basic for backward compatibility
+            
+            if statistical_fusion == 'structured':
+                from .utils.attention_pool import StructuredStatisticalPool
+                fusion_strategy = getattr(self, 'statistical_fusion_strategy', 'separate_then_combine')
+                self.pool = StructuredStatisticalPool(phi_output_size, stats=statistical_features, fusion_strategy=fusion_strategy)
+                
+                if fusion_strategy == 'separate_then_combine':
+                    pool_output_dim = len(statistical_features) * (phi_output_size // 2)
+                else:  # attention_fusion or weighted_sum
+                    pool_output_dim = phi_output_size
+                    
+            elif statistical_fusion == 'scale_aware':
+                from .utils.attention_pool import ScaleAwareStatisticalPool
+                self.pool = ScaleAwareStatisticalPool(phi_output_size, stats=statistical_features)
+                pool_output_dim = len(statistical_features) * phi_output_size
+                
+            else:  # basic (original)
+                self.pool = StatisticalPool(phi_output_size, stats=statistical_features)
+                pool_output_dim = len(statistical_features) * phi_output_size
+            
+        elif self.aggregation == "hybrid":
+            if statistical_features is None:
+                statistical_features = ['mean', 'std']
+            self.pool = HybridAttentionPool(phi_output_size,
+                                            n_heads=self.attention_n_heads,
+                                            n_tokens=self.attention_n_tokens,
+                                            stats=statistical_features,
+                                            combine_strategy=hybrid_combine_strategy)
+            if hybrid_combine_strategy == 'concat':
+                pool_output_dim = (self.attention_n_tokens + len(statistical_features)) * phi_output_size
+            else:
+                pool_output_dim = self.attention_n_tokens * phi_output_size
+                
+        elif self.aggregation == "specialized":
+            if attention_specializations is None:
+                attention_specializations = ['general', 'extreme', 'variance', 'local']
+            self.pool = SpecializedAttentionPool(phi_output_size,
+                                                 n_heads=self.attention_n_heads,
+                                                 specializations=attention_specializations)
+            pool_output_dim = len(attention_specializations) * phi_output_size
+            
+        elif self.aggregation == "mean":
+            pool_output_dim = phi_output_size
+        else:
+            # Should not reach here due to validation above
+            raise ValueError(f"Unsupported aggregation type: {self.aggregation}")
 
         # Validate encoding strategy
         if self.encoding_strategy != 'concatenate':
@@ -116,8 +186,7 @@ class SetONet(torch.nn.Module):
             )
 
         # Rho network: processes aggregated representation from phi
-        rho_input_dim = (self.phi_output_size *
-                         (self.attention_n_tokens if self.aggregation == "attention" else 1))
+        rho_input_dim = pool_output_dim
 
         self.rho = nn.Sequential(
             nn.Linear(rho_input_dim, rho_hidden_size),
@@ -239,11 +308,9 @@ class SetONet(torch.nn.Module):
         # ---- Aggregation over sensors ---------------------------------------
         if self.aggregation == "mean":
             aggregated = torch.mean(phi_output_reshaped, dim=1)            # (B, dφ)
-        elif self.aggregation == "attention": # Ensure this covers all valid cases
-            aggregated = self.pool(phi_output_reshaped)                    # (B, dφ)
         else:
-            # This case should ideally not be reached if aggregation_type is validated in __init__
-            raise ValueError(f"Unsupported aggregation type: {self.aggregation}")
+            # All other aggregation types use the pool object
+            aggregated = self.pool(phi_output_reshaped)                    # (B, pool_output_dim)
 
         # Apply rho to the aggregated representation
         # Shape: (batch_size, output_size_tgt * p)
@@ -363,6 +430,13 @@ class SetONet(torch.nn.Module):
 
             # add loss components (can add regularization later if needed)
             loss = prediction_loss
+            
+            # Add specialization loss if using specialized attention
+            if (self.aggregation == "specialized" and 
+                self.use_specialization_loss and 
+                hasattr(self.pool, 'get_specialization_loss')):
+                spec_loss = self.pool.get_specialization_loss()
+                loss = loss + self.specialization_loss_weight * spec_loss
 
             # backprop with gradient clipping
             self.opt.zero_grad()

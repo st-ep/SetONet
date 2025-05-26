@@ -29,17 +29,41 @@ def parse_arguments():
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
     parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
+    parser.add_argument('--son_rho_hidden', type=int, default=512, help='Hidden size for SetONet rho network')
     parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
     parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
     parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
+    
+    # Aggregation options
+    parser.add_argument('--son_aggregation', type=str, default="attention", 
+                       choices=["mean", "attention", "statistical", "hybrid", "specialized"], 
+                       help='Aggregation type for SetONet')
+    parser.add_argument('--attention_n_tokens', type=int, default=1, help='Number of attention tokens')
+    parser.add_argument('--statistical_features', type=str, nargs='+', 
+                       choices=['mean', 'std', 'min', 'max', 'median', 'sum'],
+                       default=None, help='Statistical features to use (default: mean,std,min,max)')
+    parser.add_argument('--statistical_fusion', type=str, default='basic',
+                       choices=['basic', 'structured', 'scale_aware'],
+                       help='How to combine statistical features: basic=concat, structured=separate processing, scale_aware=normalized')
+    parser.add_argument('--statistical_fusion_strategy', type=str, default='separate_then_combine',
+                       choices=['separate_then_combine', 'attention_fusion', 'weighted_sum'],
+                       help='Strategy for structured statistical fusion')
+    parser.add_argument('--hybrid_combine_strategy', type=str, default='concat',
+                       choices=['concat', 'learned', 'weighted'],
+                       help='Strategy for combining attention and statistical features in hybrid mode')
+    parser.add_argument('--attention_specializations', type=str, nargs='+',
+                       choices=['general', 'extreme', 'variance', 'local'],
+                       default=None, help='Specializations for attention tokens (default: general,extreme,variance,local)')
+    parser.add_argument('--use_specialization_loss', action='store_true',
+                       help='Use specialization loss to encourage query diversity')
+    parser.add_argument('--specialization_loss_weight', type=float, default=0.01,
+                       help='Weight for specialization loss')
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
     parser.add_argument('--son_epochs', type=int, default=175000, help='Number of epochs for SetONet')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 125000, 150000], help="List of steps for LR decay milestones.")
+    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Data generation

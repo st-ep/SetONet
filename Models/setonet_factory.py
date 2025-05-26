@@ -28,9 +28,37 @@ def create_setonet_model(args, device):
         phi_output_size=args.son_phi_output_size,
         pos_encoding_type=args.pos_encoding_type,
         aggregation_type=args.son_aggregation,
+        attention_n_tokens=args.attention_n_tokens,
+        statistical_features=args.statistical_features,
+        statistical_fusion=args.statistical_fusion,
+        statistical_fusion_strategy=args.statistical_fusion_strategy,
+        hybrid_combine_strategy=args.hybrid_combine_strategy,
+        attention_specializations=args.attention_specializations,
+        use_specialization_loss=args.use_specialization_loss,
+        specialization_loss_weight=args.specialization_loss_weight,
     )
 
     setonet_model = SetONet(**setonet_args).to(device)
+    
+    print(f"Using aggregation type: {args.son_aggregation}")
+    if args.son_aggregation == "attention":
+        print(f"  - Attention tokens: {args.attention_n_tokens}")
+    elif args.son_aggregation == "statistical":
+        features = args.statistical_features or ['mean', 'std', 'min', 'max']
+        print(f"  - Statistical features: {features}")
+        print(f"  - Statistical fusion: {args.statistical_fusion}")
+        if args.statistical_fusion == 'structured':
+            print(f"  - Fusion strategy: {args.statistical_fusion_strategy}")
+    elif args.son_aggregation == "hybrid":
+        features = args.statistical_features or ['mean', 'std']
+        print(f"  - Attention tokens: {args.attention_n_tokens}")
+        print(f"  - Statistical features: {features}")
+        print(f"  - Combine strategy: {args.hybrid_combine_strategy}")
+    elif args.son_aggregation == "specialized":
+        specs = args.attention_specializations or ['general', 'extreme', 'variance', 'local']
+        print(f"  - Specializations: {specs}")
+        if args.use_specialization_loss:
+            print(f"  - Specialization loss weight: {args.specialization_loss_weight}")
     
     return setonet_model
 
