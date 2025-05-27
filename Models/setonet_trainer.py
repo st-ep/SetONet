@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-from Data.data_utils import generate_batch
+from Data.data_utils import generate_batch, apply_sensor_dropoff
 from .utils.helper_utils import calculate_l2_relative_error, prepare_setonet_inputs, prepare_setonet_inputs_variable, prepare_setonet_inputs_variable_integral
 from .utils.model_utils import print_model_summary, count_parameters
 
@@ -44,6 +44,7 @@ def train_setonet_model(setonet_model, args, training_params, device, log_dir=No
     loss_fn = torch.nn.MSELoss()
 
     print(f"\nTraining SetONet for {benchmark} task...")
+    print("Training with full sensor data (no drop-off)")
     epoch_pbar = tqdm(range(args.son_epochs), desc=f"Training SetONet ({benchmark})")
     
     for epoch in epoch_pbar:
@@ -63,6 +64,7 @@ def train_setonet_model(setonet_model, args, training_params, device, log_dir=No
                 sensor_size=sensor_size
             )
             f_at_sensors, f_prime_at_sensors, f_at_trunk, f_prime_at_trunk, batch_x_eval_points, sensor_x_batch = batch_data
+            sensor_x_to_use = sensor_x_batch
         else:
             f_at_sensors, f_prime_at_sensors, f_at_trunk, f_prime_at_trunk, batch_x_eval_points = generate_batch(
                 batch_size=batch_size_train,
@@ -71,60 +73,43 @@ def train_setonet_model(setonet_model, args, training_params, device, log_dir=No
                 scale=scale,
                 input_range=input_range,
                 device=device,
-                constant_zero=True,
-                variable_sensors=False
+                constant_zero=True
             )
+            sensor_x_to_use = sensor_x_original
         
-        # Prepare inputs based on benchmark and sensor type
+        # NO sensor drop-off during training - use full sensor data
+        sensor_x_used = sensor_x_to_use
+        f_at_sensors_used = f_at_sensors
+        actual_sensor_size = sensor_size
+        
+        # Prepare inputs and get predictions based on benchmark
         if benchmark == 'derivative':
-            if variable_sensors:
-                # Use regular batched processing since all samples in batch have same sensors
-                xs, us, ys = prepare_setonet_inputs(
-                    sensor_x_batch,  # This should be the sensor locations for this batch
-                    batch_size_train,
-                    f_at_sensors.unsqueeze(-1),
-                    batch_x_eval_points,
-                    sensor_size
-                )
-                pred = setonet_model(xs, us, ys)
-                pred = pred.squeeze(-1)  # [batch_size, n_trunk_points]
-            else:
-                xs, us, ys = prepare_setonet_inputs(
-                    sensor_x_original,
-                    batch_size_train,
-                    f_at_sensors.unsqueeze(-1),
-                    batch_x_eval_points,
-                    sensor_size
-                )
-                pred = setonet_model(xs, us, ys)
-                pred = pred.squeeze(-1)  # [batch_size, n_trunk_points]
+            # Use individual processing for derivative task if needed
+            xs, us, ys = prepare_setonet_inputs(
+                sensor_x_used,
+                batch_size_train,
+                f_at_sensors_used.unsqueeze(-1),
+                batch_x_eval_points,
+                actual_sensor_size
+            )
+            pred = setonet_model(xs, us, ys)
+            pred = pred.squeeze(-1)  # [batch_size, n_trunk_points]
             
             target = f_prime_at_trunk.T  # [batch_size, n_trunk_points]
             
         elif benchmark == 'integral':
-            if variable_sensors:
-                # Use regular batched processing since all samples in batch have same sensors
-                xs, us, ys = prepare_setonet_inputs(
-                    batch_x_eval_points,
-                    batch_size_train,
-                    f_prime_at_trunk.T.unsqueeze(-1),
-                    sensor_x_batch,  # Same sensor locations for all samples in batch
-                    n_trunk_points_train
-                )
-                pred = setonet_model(xs, us, ys)
-                pred = pred.squeeze(-1)  # [batch_size, sensor_size]
-            else:
-                xs, us, ys = prepare_setonet_inputs(
-                    batch_x_eval_points,
-                    batch_size_train,
-                    f_prime_at_trunk.T.unsqueeze(-1),
-                    sensor_x_original,
-                    n_trunk_points_train
-                )
-                pred = setonet_model(xs, us, ys)
-                pred = pred.squeeze(-1)  # [batch_size, sensor_size]
+            # Use regular batched processing since all samples in batch have same sensors
+            xs, us, ys = prepare_setonet_inputs(
+                batch_x_eval_points,
+                batch_size_train,
+                f_prime_at_trunk.T.unsqueeze(-1),
+                sensor_x_used,
+                n_trunk_points_train
+            )
+            pred = setonet_model(xs, us, ys)
+            pred = pred.squeeze(-1)  # [batch_size, actual_sensor_size]
             
-            target = f_at_sensors  # [batch_size, sensor_size]
+            target = f_at_sensors_used  # [batch_size, actual_sensor_size]
         
         # Compute loss
         loss = loss_fn(pred, target)
@@ -150,7 +135,7 @@ def train_setonet_model(setonet_model, args, training_params, device, log_dir=No
         if benchmark == 'derivative':
             rel_l2_error = calculate_l2_relative_error(pred, f_prime_at_trunk.T)
         else:  # integral
-            rel_l2_error = calculate_l2_relative_error(pred, f_at_sensors)
+            rel_l2_error = calculate_l2_relative_error(pred, f_at_sensors_used)
 
         # TensorBoard logging
         if writer and epoch % 100 == 0:  # Log every 100 epochs to avoid too much data
@@ -158,10 +143,13 @@ def train_setonet_model(setonet_model, args, training_params, device, log_dir=No
             writer.add_scalar('L2_Error/Training', rel_l2_error.item(), epoch)
             writer.add_scalar('Training/Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
 
-        epoch_pbar.set_postfix(
-            Loss=f"{loss.item():.3e}",
-            L2_Error=f"{rel_l2_error.item():.3e}"
-        )
+        progress_info = {
+            "Loss": f"{loss.item():.3e}",
+            "L2_Error": f"{rel_l2_error.item():.3e}",
+            "Sensors": f"{actual_sensor_size}"
+        }
+        
+        epoch_pbar.set_postfix(progress_info)
     
     # Close TensorBoard writer
     if writer:

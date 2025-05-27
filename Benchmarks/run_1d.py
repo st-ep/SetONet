@@ -34,16 +34,21 @@ def parse_arguments():
     parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
     parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
     parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
     parser.add_argument('--son_epochs', type=int, default=175000, help='Number of epochs for SetONet')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 125000, 150000], help="List of steps for LR decay milestones.")
+    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Data generation
     parser.add_argument('--variable_sensors', action='store_true', help='Use different random sensor locations for each sample (more challenging)')
+    
+    # Evaluation robustness testing (sensor failures)
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
+    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
     
     # Model loading
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
@@ -65,12 +70,14 @@ def setup_parameters(args):
     return {
         'input_range': [-1, 1],
         'scale': 0.1,
-        'sensor_size': 200,
+        'sensor_size': 250,
         'batch_size_train': 64,
         'n_trunk_points_train': 200,
         'n_test_samples_eval': 1000,
         'sensor_seed': 42,
-        'variable_sensors': args.variable_sensors
+        'variable_sensors': args.variable_sensors,
+        'eval_sensor_dropoff': args.eval_sensor_dropoff,
+        'replace_with_nearest': args.replace_with_nearest
     }
 
 def create_sensor_points(params, device):
@@ -144,7 +151,9 @@ def generate_plots(setonet_model, params, log_dir, benchmark, sensor_x_original)
                     num_samples_to_plot=1,
                     plot_filename_prefix=f"{benchmark}_eval_batch_{batch_idx+1}_",
                     is_inverse_task=False,
-                    use_zero_constant=True
+                    use_zero_constant=True,
+                    sensor_dropoff=params.get('eval_sensor_dropoff', 0.0),
+                    replace_with_nearest=params.get('replace_with_nearest', False)
                 )
         else:
             # Fixed sensors - use the original sensor locations
@@ -158,7 +167,9 @@ def generate_plots(setonet_model, params, log_dir, benchmark, sensor_x_original)
                 num_samples_to_plot=3,
                 plot_filename_prefix=f"{benchmark}_",
                 is_inverse_task=False,
-                use_zero_constant=True
+                use_zero_constant=True,
+                sensor_dropoff=params.get('eval_sensor_dropoff', 0.0),
+                replace_with_nearest=params.get('replace_with_nearest', False)
             )
     elif benchmark == 'integral':
         # For integral: f' -> f (dense plot locations -> sensor locations)
@@ -173,7 +184,9 @@ def generate_plots(setonet_model, params, log_dir, benchmark, sensor_x_original)
             num_samples_to_plot=3,
             plot_filename_prefix=f"{benchmark}_",
             is_inverse_task=True,
-            use_zero_constant=True
+            use_zero_constant=True,
+            sensor_dropoff=params.get('eval_sensor_dropoff', 0.0),
+            replace_with_nearest=params.get('replace_with_nearest', False)
         )
 
 def main():
@@ -188,7 +201,14 @@ def main():
     if len(args.lr_schedule_steps) != len(args.lr_schedule_gammas):
         raise ValueError("--lr_schedule_steps and --lr_schedule_gammas must have the same number of elements.")
     
+    if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
+        raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
+    
     print(f"Running benchmark: {args.benchmark}")
+    if args.eval_sensor_dropoff > 0:
+        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
+        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using {replacement_mode}")
+        print("(Training will use full sensor data)")
     
     log_dir = setup_logging(project_root, args.benchmark)
     params = setup_parameters(args)
@@ -217,6 +237,7 @@ def main():
             'sensor_size': params['sensor_size'],
             'benchmark': args.benchmark,
             'variable_sensors': params['variable_sensors']
+            # No sensor drop-off in training params
         }
         train_setonet_model(setonet_model, args, training_params, device, log_dir)
     else:
@@ -232,7 +253,9 @@ def main():
         'sensor_size': params['sensor_size'],
         'n_test_samples_eval': params['n_test_samples_eval'],
         'benchmark': args.benchmark,
-        'variable_sensors': params['variable_sensors']
+        'variable_sensors': params['variable_sensors'],
+        'sensor_dropoff': params['eval_sensor_dropoff'],  # Only for evaluation
+        'replace_with_nearest': params['replace_with_nearest']
     }
     eval_result = evaluate_setonet_model(setonet_model, eval_params, device)
     

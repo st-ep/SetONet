@@ -3,6 +3,28 @@ import torch.nn as nn
 import os
 from .SetONet import SetONet
 
+def get_activation_function(activation_name):
+    """
+    Returns the activation function based on the name.
+    
+    Args:
+        activation_name: String name of the activation function
+        
+    Returns:
+        torch.nn activation function
+    """
+    activation_map = {
+        'relu': nn.ReLU,
+        'tanh': nn.Tanh,
+        'gelu': nn.GELU,
+        'swish': nn.SiLU  # SiLU is equivalent to Swish
+    }
+    
+    if activation_name.lower() not in activation_map:
+        raise ValueError(f"Unsupported activation function: {activation_name}. Choose from {list(activation_map.keys())}")
+    
+    return activation_map[activation_name.lower()]
+
 def create_setonet_model(args, device):
     """
     Creates and initializes a single SetONet model based on arguments.
@@ -11,6 +33,10 @@ def create_setonet_model(args, device):
         SetONet: The initialized model
     """
     print(f"\n--- Initializing SetONet Model for {args.benchmark} ---")
+    print(f"Using activation function: {args.activation_fn}")
+    
+    # Get the activation function
+    activation_fn = get_activation_function(args.activation_fn)
     
     # SetONet model arguments
     setonet_args = dict(
@@ -23,7 +49,7 @@ def create_setonet_model(args, device):
         rho_hidden_size=args.son_rho_hidden,
         trunk_hidden_size=args.son_trunk_hidden,
         n_trunk_layers=args.son_n_trunk_layers,
-        activation_fn=nn.Tanh,
+        activation_fn=activation_fn,
         use_deeponet_bias=True,
         phi_output_size=args.son_phi_output_size,
         pos_encoding_type=args.pos_encoding_type,
@@ -59,6 +85,10 @@ def create_setonet_models(args, device):
     Creates and initializes SetONet models (T and T_inv) based on arguments.
     """
     print("\n--- Initializing SetONet Models (Forward T and Inverse T_inv) ---")
+    print(f"Using activation function: {getattr(args, 'activation_fn', 'tanh')}")
+    
+    # Get the activation function (default to Tanh for backward compatibility)
+    activation_fn = get_activation_function(getattr(args, 'activation_fn', 'tanh'))
     
     # Common arguments for both SetONet models
     setonet_common_args = dict(
@@ -71,7 +101,7 @@ def create_setonet_models(args, device):
         rho_hidden_size=args.son_rho_hidden,
         trunk_hidden_size=args.son_trunk_hidden,
         n_trunk_layers=args.son_n_trunk_layers,
-        activation_fn=nn.Tanh,
+        activation_fn=activation_fn,
         use_deeponet_bias=True,
         phi_output_size=args.son_phi_output_size,
         pos_encoding_type=args.pos_encoding_type,

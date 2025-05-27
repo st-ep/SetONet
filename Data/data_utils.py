@@ -14,6 +14,92 @@ def sample_variable_sensor_points(sensor_size, input_range, device):
     sensor_x = sensor_x.sort()[0]  # Sort for consistency
     return sensor_x.view(-1, 1)
 
+def apply_sensor_dropoff(sensor_x, sensor_values, dropoff_rate, replace_with_nearest=False):
+    """
+    Randomly drops sensors based on the specified drop-off rate.
+    
+    Args:
+        sensor_x: Sensor locations [n_sensors, 1]
+        sensor_values: Sensor values [batch_size, n_sensors] or [n_sensors]
+        dropoff_rate: Fraction of sensors to drop (0.0 to 1.0)
+        replace_with_nearest: If True, replace dropped sensors with nearest remaining sensors
+                             instead of removing them entirely (creates duplicate sensor pairs)
+    
+    Returns:
+        Tuple of (processed_sensor_x, processed_sensor_values)
+    """
+    if dropoff_rate == 0.0:
+        return sensor_x, sensor_values
+    
+    n_sensors = sensor_x.shape[0]
+    n_keep = max(1, int(n_sensors * (1.0 - dropoff_rate)))  # Keep at least 1 sensor
+    
+    if not replace_with_nearest:
+        # Original behavior: just remove dropped sensors entirely
+        keep_indices = torch.randperm(n_sensors, device=sensor_x.device)[:n_keep]
+        keep_indices = keep_indices.sort()[0]  # Sort to maintain order
+        
+        dropped_sensor_x = sensor_x[keep_indices]
+        
+        if sensor_values.dim() == 1:
+            dropped_sensor_values = sensor_values[keep_indices]
+        else:
+            dropped_sensor_values = sensor_values[:, keep_indices]
+        
+        return dropped_sensor_x, dropped_sensor_values
+    
+    else:
+        # Leverage permutation invariance: replace dropped sensors with nearest remaining sensors
+        # This creates duplicate (location, value) pairs to maintain the same input size
+        
+        # Get indices efficiently
+        all_indices = torch.randperm(n_sensors, device=sensor_x.device)
+        keep_indices = all_indices[:n_keep]
+        drop_indices = all_indices[n_keep:]
+        
+        if len(drop_indices) == 0:
+            return sensor_x, sensor_values
+        
+        # Clone original tensors to avoid modifying inputs
+        processed_sensor_x = sensor_x.clone()
+        processed_sensor_values = sensor_values.clone()
+        
+        # Vectorized nearest neighbor replacement for (location, value) pairs
+        keep_positions = sensor_x[keep_indices].squeeze()  # [n_keep]
+        drop_positions = sensor_x[drop_indices].squeeze()  # [n_drop]
+        
+        # Calculate distances: [n_drop, n_keep]
+        distances = torch.abs(drop_positions.unsqueeze(1) - keep_positions.unsqueeze(0))
+        
+        # Find nearest keep indices for each drop index: [n_drop]
+        nearest_keep_local_indices = torch.argmin(distances, dim=1)
+        nearest_keep_global_indices = keep_indices[nearest_keep_local_indices]
+        
+        # Debug: Print replacement info for first few sensors
+        if len(drop_indices) > 0 and torch.rand(1).item() < 0.0:  # Set to 0.0 to disable
+            print(f"\nSensor replacement debug:")
+            print(f"Dropped sensor indices: {drop_indices.tolist()}")
+            print(f"Nearest remaining indices: {nearest_keep_global_indices.tolist()}")
+            for i, (drop_idx, nearest_idx) in enumerate(zip(drop_indices, nearest_keep_global_indices)):
+                if i < 3:  # Only show first 3 for brevity
+                    orig_pos = sensor_x[drop_idx].item()
+                    nearest_pos = sensor_x[nearest_idx].item()
+                    print(f"  Sensor {drop_idx.item()} at x={orig_pos:.3f} -> replaced with sensor {nearest_idx.item()} at x={nearest_pos:.3f}")
+        
+        # Replace BOTH positions and values as pairs (this leverages permutation invariance)
+        # Example: if sensor 2 is dropped and sensor 3 is nearest:
+        # Original: [(x1,u1), (x2,u2), (x3,u3)] -> Result: [(x1,u1), (x3,u3), (x3,u3)]
+        processed_sensor_x[drop_indices] = sensor_x[nearest_keep_global_indices]
+        
+        if sensor_values.dim() == 1:
+            # For 1D sensor values: [n_sensors]
+            processed_sensor_values[drop_indices] = sensor_values[nearest_keep_global_indices]
+        else:
+            # For batched sensor values: [batch_size, n_sensors]
+            processed_sensor_values[:, drop_indices] = sensor_values[:, nearest_keep_global_indices]
+        
+        return processed_sensor_x, processed_sensor_values
+
 def generate_batch(batch_size, n_trunk_points, sensor_x, scale, input_range, device, constant_zero=True, variable_sensors=False, sensor_size=None):
     """
     Generates a batch of polynomial functions and their derivatives.

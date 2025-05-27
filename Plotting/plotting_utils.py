@@ -16,7 +16,9 @@ def plot_operator_comparison(
     num_samples_to_plot=3,
     plot_filename_prefix="", # New argument
     is_inverse_task=False,    # New argument
-    use_zero_constant: bool = True # New argument to control d_coeff for plotting
+    use_zero_constant: bool = True, # New argument to control d_coeff for plotting
+    sensor_dropoff: float = 0.0,  # New argument for sensor drop-off
+    replace_with_nearest: bool = False  # New argument for nearest neighbor replacement
 ):
     """
     Plots comparison between true and predicted functions for operator learning.
@@ -32,8 +34,13 @@ def plot_operator_comparison(
         plot_filename_prefix: Prefix for plot filenames
         is_inverse_task: Whether this is inverse task (f' -> f) or forward (f -> f')
         use_zero_constant: Whether to use zero integration constant
+        sensor_dropoff: Sensor drop-off rate to apply (same as training/evaluation)
+        replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
     """
     print(f"Generating plots with {len(branch_input_locations)} branch points and {len(trunk_query_locations)} trunk points...")
+    if sensor_dropoff > 0:
+        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
+        print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
     
     # Note: For variable sensor training, we use fixed sensor locations for plotting
     # to ensure consistent visualization across different runs
@@ -64,7 +71,7 @@ def plot_operator_comparison(
         else:
             d_coeff = (torch.rand(1).item() * 2 - 1) * scale
 
-        # True function f(x) and its derivative f'(x)
+        # True function f(x) and its derivative f'(x) - DEFINE BEFORE USING
         def f_true(x_coords):
             return a_coeff * x_coords**3 + b_coeff * x_coords**2 + c_coeff * x_coords + d_coeff
         def df_true(x_coords):
@@ -95,16 +102,69 @@ def plot_operator_comparison(
         branch_values_true_np = branch_values_true.numpy() if hasattr(branch_values_true, 'numpy') else branch_values_true
         operator_output_true_np = operator_output_true.numpy() if hasattr(operator_output_true, 'numpy') else operator_output_true
 
+        # Apply sensor drop-off if specified (same as training/evaluation)
+        if sensor_dropoff > 0.0:
+            from Data.data_utils import apply_sensor_dropoff
+            
+            # Convert to torch tensors for drop-off function
+            branch_locs_torch = branch_input_locations.clone().to(device)
+            branch_values_torch = torch.tensor(branch_values_true_np, device=device, dtype=torch.float32).squeeze()
+            
+            # Apply drop-off
+            branch_locs_dropped, branch_values_dropped = apply_sensor_dropoff(
+                branch_locs_torch, branch_values_torch, sensor_dropoff, replace_with_nearest
+            )
+            
+            # Convert back to CPU for plotting
+            branch_input_locs_plot = branch_locs_dropped.cpu()
+            branch_values_plot = branch_values_dropped.cpu().numpy()
+            
+            # For model input, keep on device
+            branch_input_locs_model = branch_locs_dropped
+            branch_values_model = branch_values_dropped
+            actual_n_sensors = len(branch_input_locs_plot)
+        else:
+            # No drop-off
+            branch_input_locs_plot = branch_input_locs_cpu
+            branch_values_plot = branch_values_true_np
+            branch_input_locs_model = branch_input_locations
+            branch_values_model = torch.tensor(branch_values_true_np, device=device, dtype=torch.float32).squeeze()
+            actual_n_sensors = len(branch_input_locs_cpu)
+
         # Plot the input function (left subplot)
-        axs[0, 0].plot(branch_input_locs_cpu.squeeze(), branch_values_true_np.squeeze(), 'b-', linewidth=2, label='Input Function')
+        axs[0, 0].plot(branch_input_locs_plot.squeeze(), branch_values_plot.squeeze(), 'b-', linewidth=2, label='Input Function')
         
-        # Plot sensor points (every 10th sensor point to avoid clutter)
-        sensor_indices = range(0, len(branch_input_locs_cpu), max(1, len(branch_input_locs_cpu) // 10))
-        sensor_x_subset = branch_input_locs_cpu[sensor_indices]
-        sensor_y_subset = branch_values_true_np[sensor_indices]
-        axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
-                         c='red', s=50, zorder=5, alpha=0.8, 
-                         label=f'Sensor Points (every {max(1, len(branch_input_locs_cpu) // 10)}th)')
+        # Plot sensor points (every 20th sensor point to avoid clutter)
+        if replace_with_nearest and sensor_dropoff > 0:
+            # For nearest neighbor replacement, plot based on unique sensors only
+            unique_sensor_locs, unique_indices = torch.unique(branch_input_locs_plot, dim=0, return_inverse=True)
+            unique_sensor_values = []
+            
+            # Get values corresponding to unique locations
+            for i, unique_loc in enumerate(unique_sensor_locs):
+                # Find first occurrence of this unique location
+                first_idx = (branch_input_locs_plot == unique_loc.unsqueeze(0)).all(dim=1).nonzero()[0].item()
+                unique_sensor_values.append(branch_values_plot[first_idx])
+            
+            unique_sensor_values = np.array(unique_sensor_values)
+            
+            # Plot every 20th unique sensor
+            sensor_indices = range(0, len(unique_sensor_locs), 20)
+            sensor_x_subset = unique_sensor_locs[sensor_indices]
+            sensor_y_subset = unique_sensor_values[sensor_indices]
+            
+            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
+                             c='red', s=50, zorder=5, alpha=0.8, 
+                             label=f'Unique sensors (every 20th)')
+        else:
+            # Normal case: plot every 20th sensor
+            sensor_indices = range(0, len(branch_input_locs_plot), 20)
+            sensor_x_subset = branch_input_locs_plot[sensor_indices]
+            sensor_y_subset = branch_values_plot[sensor_indices]
+            
+            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
+                             c='red', s=50, zorder=5, alpha=0.8, 
+                             label=f'Sensors (every 20th)')
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel(plot_ylabel_left)
@@ -115,21 +175,17 @@ def plot_operator_comparison(
         # Get model prediction
         with torch.no_grad():
             # Prepare inputs for the model (must be on model_device)
-            branch_locs_model_dev = branch_input_locations.clone().to(device)
             trunk_query_locs_model_dev = trunk_query_locations.clone().to(device)
-
-            # Branch values (u(x_i) or u(y_j)) are used as is (original scale)
-            branch_values_torch = torch.tensor(branch_values_true_np, device=device, dtype=torch.float32)
 
             # Use prepare_setonet_inputs
             from Models.utils.helper_utils import prepare_setonet_inputs
             
             xs, us, ys = prepare_setonet_inputs(
-                branch_locs_model_dev,
+                branch_input_locs_model,
                 1,  # batch_size = 1 for single sample
-                branch_values_torch.unsqueeze(-1),  # Add feature dimension
+                branch_values_model.unsqueeze(-1),  # Add feature dimension
                 trunk_query_locs_model_dev,
-                len(branch_input_locations)
+                actual_n_sensors  # Use actual number of sensors after drop-off
             )
 
             # Get model prediction
@@ -148,7 +204,9 @@ def plot_operator_comparison(
         plt.tight_layout()
         
         # Save plot
-        save_path = os.path.join(log_dir, f"{plot_filename_prefix}{task_type_str}_sample_{i+1}.png")
+        replacement_suffix = "_nearest" if replace_with_nearest and sensor_dropoff > 0 else ""
+        dropoff_suffix = f"_dropoff_{sensor_dropoff:.1f}{replacement_suffix}" if sensor_dropoff > 0 else ""
+        save_path = os.path.join(log_dir, f"{plot_filename_prefix}{task_type_str}_sample_{i+1}{dropoff_suffix}.png")
         plt.savefig(save_path)
         print(f"Saved {task_type_str} plot for sample {i+1} to {save_path}")
         plt.close(fig)

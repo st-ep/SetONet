@@ -26,9 +26,9 @@ class SetONet(torch.nn.Module):
                  use_positional_encoding=True, # Flag to enable/disable positional encoding
                  pos_encoding_dim=64, # Dimension for sinusoidal positional encoding
                  pos_encoding_type='skip', # Type: 'sinusoidal', or 'skip'
-                 pos_encoding_max_freq=1.0, # Max frequency/scale for sinusoidal encoding
+                 pos_encoding_max_freq=0.1, # Max frequency/scale for sinusoidal encoding
                  encoding_strategy='concatenate', # Strategy for combining positional and sensor features. Only 'concatenate' is supported.
-                 aggregation_type: str = "mean",  # 'mean' or 'attention'
+                 aggregation_type: str = "attention",  # 'mean' or 'attention'
                  attention_n_tokens: int = 1,     # k – number of learnable query tokens
                  ):
         super().__init__()
