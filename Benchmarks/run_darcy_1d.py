@@ -305,78 +305,48 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
         'n_test_samples': n_test_samples,
     }
 
-def generate_darcy_plots(setonet_model, dataset, sensor_x, query_x, sensor_indices, query_indices, log_dir, device):
-    """Generate plots for Darcy 1D predictions."""
+def generate_darcy_plots(setonet_model, dataset, sensor_x, query_x, sensor_indices, query_indices, params, log_dir, device):
+    """Generate plots for Darcy 1D predictions using the plotting utilities (similar to derivative benchmark)."""
     print("\n--- Generating Darcy 1D Plots ---")
     print(f"Plotting using SAME {len(sensor_x)} sensor locations as training/testing")
+    print("Generating plots for both train and test data (3 samples each)")
     
-    import matplotlib.pyplot as plt
+    # Use the new plotting utility function for consistency with derivative benchmark
+    from Plotting.plotting_utils import plot_darcy_comparison
     
-    setonet_model.eval()
-    test_data = dataset['test']
+    # Plot test data (generalization performance)
+    print("\n📊 Plotting TEST samples (generalization)...")
+    plot_darcy_comparison(
+        model_to_use=setonet_model,
+        dataset=dataset,
+        sensor_x=sensor_x,
+        query_x=query_x,
+        sensor_indices=sensor_indices,
+        query_indices=query_indices,
+        log_dir=log_dir,
+        num_samples_to_plot=3,
+        plot_filename_prefix="darcy_1d",
+        sensor_dropoff=params.get('eval_sensor_dropoff', 0.0),
+        replace_with_nearest=params.get('replace_with_nearest', False),
+        dataset_split="test"
+    )
     
-    # Plot first 3 test samples
-    n_plot_samples = min(3, len(test_data))
-    
-    fig, axes = plt.subplots(n_plot_samples, 3, figsize=(15, 5*n_plot_samples))
-    if n_plot_samples == 1:
-        axes = axes.reshape(1, -1)
-    
-    with torch.no_grad():
-        for i in range(n_plot_samples):
-            sample = test_data[i]
-            x_grid = torch.tensor(sample['X'], dtype=torch.float32)
-            u_full = torch.tensor(sample['u'], dtype=torch.float32).to(device)
-            s_full = torch.tensor(sample['s'], dtype=torch.float32).to(device)
-            
-            # Get sensor and query values
-            u_at_sensors = u_full[sensor_indices]
-            s_at_queries_true = s_full[query_indices]
-            
-            # Prepare inputs for SetONet
-            xs = sensor_x.unsqueeze(0)  # [1, n_sensors, 1]
-            ys = query_x.unsqueeze(0)   # [1, n_queries, 1]
-            us = u_at_sensors.unsqueeze(0).unsqueeze(-1)  # [1, n_sensors, 1]
-            
-            # Predict
-            pred = setonet_model(xs, us, ys)
-            s_at_queries_pred = pred.squeeze()
-            
-            # Plot source term
-            axes[i, 0].plot(x_grid.cpu(), u_full.cpu(), 'b-', label='Source term u(x)', linewidth=2)
-            axes[i, 0].scatter(sensor_x.cpu().squeeze(), u_at_sensors.cpu(), c='red', s=30, label='Sensor locations', zorder=5)
-            axes[i, 0].set_xlabel('x')
-            axes[i, 0].set_ylabel('u(x)')
-            axes[i, 0].set_title(f'Sample {i+1}: Source Term')
-            axes[i, 0].grid(True, alpha=0.3)
-            axes[i, 0].legend()
-            
-            # Plot true solution
-            axes[i, 1].plot(x_grid.cpu(), s_full.cpu(), 'g-', label='True solution s(x)', linewidth=2)
-            axes[i, 1].scatter(query_x.cpu().squeeze(), s_at_queries_true.cpu(), c='red', s=30, label='Query locations', zorder=5)
-            axes[i, 1].set_xlabel('x')
-            axes[i, 1].set_ylabel('s(x)')
-            axes[i, 1].set_title(f'Sample {i+1}: True Solution')
-            axes[i, 1].grid(True, alpha=0.3)
-            axes[i, 1].legend()
-            
-            # Plot comparison
-            axes[i, 2].plot(query_x.cpu().squeeze(), s_at_queries_true.cpu(), 'g-', label='True', linewidth=2, marker='o', markersize=4)
-            axes[i, 2].plot(query_x.cpu().squeeze(), s_at_queries_pred.cpu(), 'r--', label='Predicted', linewidth=2, marker='s', markersize=4)
-            
-            # Calculate error for this sample using standard approach (with epsilon for stability)
-            error = torch.norm(s_at_queries_pred - s_at_queries_true) / (torch.norm(s_at_queries_true) + 1e-8)
-            axes[i, 2].set_xlabel('x')
-            axes[i, 2].set_ylabel('s(x)')
-            axes[i, 2].set_title(f'Sample {i+1}: Comparison (L2 error: {error:.4f})')
-            axes[i, 2].grid(True, alpha=0.3)
-            axes[i, 2].legend()
-    
-    plt.tight_layout()
-    plot_path = os.path.join(log_dir, 'darcy_1d_predictions.png')
-    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-    plt.show()
-    print(f"Darcy 1D plots saved to: {plot_path}")
+    # Plot train data (fitting performance)
+    print("\n📊 Plotting TRAIN samples (fitting)...")
+    plot_darcy_comparison(
+        model_to_use=setonet_model,
+        dataset=dataset,
+        sensor_x=sensor_x,
+        query_x=query_x,
+        sensor_indices=sensor_indices,
+        query_indices=query_indices,
+        log_dir=log_dir,
+        num_samples_to_plot=3,
+        plot_filename_prefix="darcy_1d",
+        sensor_dropoff=params.get('eval_sensor_dropoff', 0.0),
+        replace_with_nearest=params.get('replace_with_nearest', False),
+        dataset_split="train"
+    )
 
 def save_model(setonet_model, log_dir, model_was_loaded):
     """Save trained model."""
@@ -466,7 +436,7 @@ def main():
     
     # Generate plots
     generate_darcy_plots(setonet_model, dataset, sensor_x, query_x, 
-                        sensor_indices, query_indices, log_dir, device)
+                        sensor_indices, query_indices, params, log_dir, device)
     
     # Save experiment configuration
     save_experiment_config(args, params, log_dir, device, model_was_loaded, eval_result, 'darcy_1d', setonet_model)

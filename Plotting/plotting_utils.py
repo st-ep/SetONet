@@ -279,4 +279,180 @@ def plot_trunk_basis_functions_legacy(deeponet_model, setonet_model, x_basis, se
         plot_trunk_basis_functions(deeponet_model, x_basis, None, log_dir, "DeepONet")
     
     if setonet_model:
-        plot_trunk_basis_functions(setonet_model, x_basis, setonet_p_dim, log_dir, "SetONet") 
+        plot_trunk_basis_functions(setonet_model, x_basis, setonet_p_dim, log_dir, "SetONet")
+
+def plot_darcy_comparison(
+    model_to_use,
+    dataset,
+    sensor_x,
+    query_x,
+    sensor_indices,
+    query_indices,
+    log_dir,
+    num_samples_to_plot=3,
+    plot_filename_prefix="darcy_1d",
+    sensor_dropoff: float = 0.0,
+    replace_with_nearest: bool = False,
+    dataset_split="test"
+):
+    """
+    Plots comparison between true and predicted solutions for Darcy 1D dataset.
+    Creates separate plots for each sample, with 2 subplots per plot (similar to derivative benchmark).
+    
+    Args:
+        model_to_use: Trained SetONet model
+        dataset: Darcy 1D dataset (HuggingFace dataset)
+        sensor_x: Sensor locations [n_sensors, 1]
+        query_x: Query locations [n_queries, 1] 
+        sensor_indices: Indices for sensor locations in the grid
+        query_indices: Indices for query locations in the grid
+        log_dir: Directory to save plots
+        num_samples_to_plot: Number of sample functions to plot
+        plot_filename_prefix: Prefix for plot filenames
+        sensor_dropoff: Sensor drop-off rate to apply (same as evaluation)
+        replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
+        dataset_split: Which dataset split to use ("train" or "test")
+    """
+    print(f"Generating Darcy 1D plots with {len(sensor_x)} sensor points and {len(query_x)} query points...")
+    if sensor_dropoff > 0:
+        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
+        print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
+    
+    model_to_use.eval()
+    device = next(model_to_use.parameters()).device
+
+    if not model_to_use:
+        print("No model provided to plot_darcy_comparison. Skipping plot.")
+        return
+
+    # Get data from specified split
+    split_data = dataset[dataset_split]
+    n_available = len(split_data)
+    n_to_plot = min(num_samples_to_plot, n_available)
+    
+    print(f"Plotting {n_to_plot} samples from {dataset_split} set")
+    
+    # Convert locations to CPU for plotting
+    sensor_x_cpu = sensor_x.cpu()
+    query_x_cpu = query_x.cpu().squeeze()
+
+    for i in range(n_to_plot):
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6), squeeze=False)
+
+        # Get sample data
+        sample = split_data[i]
+        x_grid = torch.tensor(sample['X'], dtype=torch.float32)
+        u_full = torch.tensor(sample['u'], dtype=torch.float32).to(device)
+        s_full = torch.tensor(sample['s'], dtype=torch.float32).to(device)
+        
+        # Get values at sensor and query locations
+        u_at_sensors_true = u_full[sensor_indices]
+        s_at_queries_true = s_full[query_indices]
+
+        # Apply sensor drop-off if specified (same as evaluation)
+        if sensor_dropoff > 0.0:
+            from Data.data_utils import apply_sensor_dropoff
+            
+            # Apply drop-off to sensor data
+            sensor_x_device = sensor_x.clone().to(device)
+            sensor_locs_dropped, sensor_values_dropped = apply_sensor_dropoff(
+                sensor_x_device, u_at_sensors_true, sensor_dropoff, replace_with_nearest
+            )
+            
+            # For plotting
+            sensor_x_plot = sensor_locs_dropped.cpu()
+            u_at_sensors_plot = sensor_values_dropped.cpu().numpy()
+            
+            # For model input
+            sensor_x_model = sensor_locs_dropped
+            u_at_sensors_model = sensor_values_dropped
+            actual_n_sensors = len(sensor_x_plot)
+        else:
+            # No drop-off
+            sensor_x_plot = sensor_x_cpu
+            u_at_sensors_plot = u_at_sensors_true.cpu().numpy()
+            sensor_x_model = sensor_x
+            u_at_sensors_model = u_at_sensors_true
+            actual_n_sensors = len(sensor_x_cpu)
+
+        # Plot input source term u(x) with sensor points (left subplot)
+        axs[0, 0].plot(x_grid.cpu(), u_full.cpu(), 'b-', linewidth=2, label='Input Source Term $u(x)$')
+        
+        # Plot sensor points (every nth sensor point to avoid clutter)
+        if replace_with_nearest and sensor_dropoff > 0:
+            # For nearest neighbor replacement, plot based on unique sensors only
+            unique_sensor_locs, unique_indices = torch.unique(sensor_x_plot, dim=0, return_inverse=True)
+            unique_sensor_values = []
+            
+            # Get values corresponding to unique locations
+            for j, unique_loc in enumerate(unique_sensor_locs):
+                # Find first occurrence of this unique location
+                first_idx = (sensor_x_plot == unique_loc.unsqueeze(0)).all(dim=1).nonzero()[0].item()
+                unique_sensor_values.append(u_at_sensors_plot[first_idx])
+            
+            unique_sensor_values = np.array(unique_sensor_values)
+            
+            # Plot every nth unique sensor
+            step_size = max(1, len(unique_sensor_locs)//10)
+            sensor_indices_plot = range(0, len(unique_sensor_locs), step_size)
+            sensor_x_subset = unique_sensor_locs[sensor_indices_plot]
+            sensor_y_subset = unique_sensor_values[sensor_indices_plot]
+            
+            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
+                             c='red', s=50, zorder=5, alpha=0.8, 
+                             label=f'Unique sensors (every {step_size}th)')
+        else:
+            # Normal case: plot every nth sensor
+            step_size = max(1, len(sensor_x_plot)//10)
+            sensor_indices_plot = range(0, len(sensor_x_plot), step_size)
+            sensor_x_subset = sensor_x_plot[sensor_indices_plot]
+            sensor_y_subset = u_at_sensors_plot[sensor_indices_plot]
+            
+            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
+                             c='red', s=50, zorder=5, alpha=0.8, 
+                             label=f'Sensors (every {step_size}th)')
+        
+        axs[0, 0].set_xlabel('$x$')
+        axs[0, 0].set_ylabel('$u(x)$')
+        axs[0, 0].set_title(f'Input Source Term $u(x)$ (Sample {i+1})')
+        axs[0, 0].grid(True, alpha=0.3)
+        axs[0, 0].legend()
+
+        # Get model prediction
+        with torch.no_grad():
+            # Prepare inputs for the model
+            query_x_model = query_x.clone().to(device)
+
+            # Use prepare_setonet_inputs for consistency
+            from Models.utils.helper_utils import prepare_setonet_inputs
+            
+            xs, us, ys = prepare_setonet_inputs(
+                sensor_x_model,
+                1,  # batch_size = 1 for single sample
+                u_at_sensors_model.unsqueeze(-1),  # Add feature dimension
+                query_x_model,
+                actual_n_sensors
+            )
+
+            # Get model prediction
+            s_at_queries_pred = model_to_use(xs, us, ys)
+            s_at_queries_pred = s_at_queries_pred.squeeze().cpu().numpy()
+
+        # Plot true vs predicted solution s(x) (right subplot)
+        axs[0, 1].plot(query_x_cpu, s_at_queries_true.cpu().numpy(), 'g-', linewidth=2, label='True')
+        axs[0, 1].plot(query_x_cpu, s_at_queries_pred, 'r--', linewidth=2, label='SetONet Prediction')
+        axs[0, 1].set_xlabel('$x$')
+        axs[0, 1].set_ylabel('$s(x)$')
+        axs[0, 1].set_title(f'Output: True vs Predicted $s(x)$ (Sample {i+1})')
+        axs[0, 1].grid(True, alpha=0.3)
+        axs[0, 1].legend()
+
+        plt.tight_layout()
+        
+        # Save plot
+        replacement_suffix = "_nearest" if replace_with_nearest and sensor_dropoff > 0 else ""
+        dropoff_suffix = f"_dropoff_{sensor_dropoff:.1f}{replacement_suffix}" if sensor_dropoff > 0 else ""
+        save_path = os.path.join(log_dir, f"{plot_filename_prefix}_{dataset_split}_sample_{i+1}{dropoff_suffix}.png")
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved Darcy 1D {dataset_split} plot for sample {i+1} to {save_path}")
+        plt.close(fig) 

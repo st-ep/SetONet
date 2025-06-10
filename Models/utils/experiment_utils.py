@@ -162,30 +162,6 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
     
     print(f"Experiment configuration saved to: {config_path}")
     
-    # Also save a simplified results file for easy parsing
-    if eval_result is not None:
-        results_summary = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "benchmark": benchmark if benchmark else "legacy_bidirectional",
-            "final_l2_error": float(eval_result) if isinstance(eval_result, (float, int)) else {
-                "forward": float(eval_result[0]) if isinstance(eval_result, tuple) and len(eval_result) > 0 else None,
-                "inverse": float(eval_result[1]) if isinstance(eval_result, tuple) and len(eval_result) > 1 else None
-            },
-            "epochs": args.son_epochs,
-            "learning_rate": args.son_lr,
-            "model_architecture": {
-                "p_dim": args.son_p_dim,
-                "aggregation": args.son_aggregation,
-                "pos_encoding": args.pos_encoding_type
-            }
-        }
-        
-        results_path = os.path.join(log_dir, "results_summary.json")
-        with open(results_path, 'w') as f:
-            json.dump(results_summary, f, indent=2)
-        
-        print(f"Results summary saved to: {results_path}")
-    
     return config_path
 
 def load_experiment_config(config_path):
