@@ -167,6 +167,12 @@ Thumbs.db
 *.pt
 *.onnx
 
+# Data files
+*.npz
+*.png
+*.json
+*.arrow
+
 # Your specific log directory
 logs/
 

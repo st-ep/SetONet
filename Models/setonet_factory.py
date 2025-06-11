@@ -38,12 +38,26 @@ def create_setonet_model(args, device):
     # Get the activation function
     activation_fn = get_activation_function(args.activation_fn)
     
+    # Set input/output dimensions based on benchmark
+    if args.benchmark == 'coulomb':
+        input_size_src = 2  # 2D particle positions
+        output_size_src = 1  # scalar charge values
+        input_size_tgt = 2   # 2D query positions
+        output_size_tgt = 1  # scalar potential values
+    else:  # Default for other benchmarks (darcy_1d, etc.)
+        input_size_src = 1
+        output_size_src = 1
+        input_size_tgt = 1
+        output_size_tgt = 1
+    
+    print(f"Input dimensions: src={input_size_src}D, tgt={input_size_tgt}D")
+    
     # SetONet model arguments
     setonet_args = dict(
-        input_size_src=1,
-        output_size_src=1,
-        input_size_tgt=1,
-        output_size_tgt=1,
+        input_size_src=input_size_src,
+        output_size_src=output_size_src,
+        input_size_tgt=input_size_tgt,
+        output_size_tgt=output_size_tgt,
         p=args.son_p_dim,
         phi_hidden_size=args.son_phi_hidden,
         rho_hidden_size=args.son_rho_hidden,
