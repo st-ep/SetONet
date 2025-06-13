@@ -21,9 +21,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for Darcy 1D equation.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/darcy_1d_dataset", 
+    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/darcy_1d_dataset_301", 
                        help='Path to Darcy 1D dataset')
-    parser.add_argument('--sensor_size', type=int, default=50, help='Number of sensor locations (max 101 for Darcy 1D grid)')
+    parser.add_argument('--sensor_size', type=int, default=300, help='Number of sensor locations (max 301 for Darcy 1D grid)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
@@ -39,7 +39,7 @@ def parse_arguments():
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
     parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
+    parser.add_argument('--pos_encoding_type', type=str, default='skip', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
@@ -52,7 +52,7 @@ def parse_arguments():
     
     # Evaluation parameters
     parser.add_argument('--n_test_samples_eval', type=int, default=100, help='Number of test samples for evaluation (max 100 for Darcy 1D test set)')
-    parser.add_argument('--n_query_points', type=int, default=101, help='Number of query points for evaluation (max 101 for Darcy 1D grid)')
+    parser.add_argument('--n_query_points', type=int, default=301, help='Number of query points for evaluation (max 301 for Darcy 1D grid)')
     
     # Model loading
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
@@ -97,12 +97,22 @@ def setup_parameters(args):
     }
 
 def create_sensor_points(params, device, grid_points):
-    """Create fixed sensor points from the grid."""
-    # Use fixed sensor locations - evenly spaced subset of grid points
-    sensor_indices = torch.linspace(0, len(grid_points)-1, params['sensor_size'], dtype=torch.long)
-    sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
-    print(f"Using {params['sensor_size']} fixed sensor locations (evenly spaced)")
-    return sensor_x, sensor_indices
+    """Create sensor points from the grid - fixed or variable based on params."""
+    if params['variable_sensors']:
+        # For variable sensors, we'll generate them dynamically during training
+        # But we still need to return initial sensor locations for setup
+        print(f"Using VARIABLE sensor locations (random {params['sensor_size']} CONTINUOUS locations per batch)")
+        print("Note: Sensor locations will be sampled from continuous domain [0,1] and interpolated")
+        # Return initial random sensor locations just for setup
+        sensor_indices = torch.randperm(len(grid_points))[:params['sensor_size']].sort()[0]
+        sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
+        return sensor_x, sensor_indices
+    else:
+        # Use fixed sensor locations - evenly spaced subset of grid points
+        sensor_indices = torch.linspace(0, len(grid_points)-1, params['sensor_size'], dtype=torch.long)
+        sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
+        print(f"Using {params['sensor_size']} FIXED sensor locations (evenly spaced)")
+        return sensor_x, sensor_indices
 
 def create_query_points(params, device, grid_points, n_query_points):
     """Create query points for evaluation."""
@@ -111,10 +121,64 @@ def create_query_points(params, device, grid_points, n_query_points):
     query_x = grid_points[query_indices].to(device).view(-1, 1)
     return query_x, query_indices
 
-class DarcyDataGenerator:
-    """OPTIMIZED Data generator for Darcy 1D dataset."""
+def interpolate_sensor_values(u_data, grid_points, sensor_locations, device):
+    """
+    Efficiently interpolate sensor values at arbitrary continuous locations using linear interpolation.
     
-    def __init__(self, dataset, sensor_indices, query_indices, device):
+    Args:
+        u_data: [n_samples, n_grid] - Function values on the grid
+        grid_points: [n_grid] - Grid point locations (assumed to be sorted)
+        sensor_locations: [n_sensors] - Arbitrary sensor locations to interpolate at
+        device: PyTorch device
+        
+    Returns:
+        u_interpolated: [n_samples, n_sensors] - Interpolated values at sensor locations
+    """
+    n_samples, n_grid = u_data.shape
+    n_sensors = sensor_locations.shape[0]
+    
+    # Ensure all tensors are on the same device
+    grid_points = grid_points.to(device)
+    sensor_locations = sensor_locations.to(device)
+    u_data = u_data.to(device)
+    
+    # Use torch.searchsorted to find interpolation indices efficiently
+    # This finds the right insertion point for each sensor location in the sorted grid
+    indices = torch.searchsorted(grid_points, sensor_locations, right=False)
+    
+    # Clamp indices to valid range [1, n_grid-1] to avoid boundary issues
+    indices = torch.clamp(indices, 1, n_grid - 1)
+    
+    # Get left and right grid points for interpolation
+    left_indices = indices - 1  # [n_sensors]
+    right_indices = indices     # [n_sensors]
+    
+    # Get grid coordinates for interpolation
+    x_left = grid_points[left_indices]   # [n_sensors]
+    x_right = grid_points[right_indices] # [n_sensors]
+    
+    # Compute interpolation weights
+    # weight = (sensor_loc - x_left) / (x_right - x_left)
+    dx = x_right - x_left
+    # Handle potential division by zero (though shouldn't happen with proper grid)
+    dx = torch.where(dx > 1e-10, dx, torch.ones_like(dx))
+    weights = (sensor_locations - x_left) / dx  # [n_sensors]
+    
+    # Get function values at left and right grid points
+    # u_data: [n_samples, n_grid], left_indices: [n_sensors]
+    # Result: [n_samples, n_sensors]
+    u_left = u_data[:, left_indices]   # [n_samples, n_sensors]
+    u_right = u_data[:, right_indices] # [n_samples, n_sensors]
+    
+    # Linear interpolation: u_interp = u_left + weight * (u_right - u_left)
+    u_interpolated = u_left + weights.unsqueeze(0) * (u_right - u_left)
+    
+    return u_interpolated
+
+class DarcyDataGenerator:
+    """OPTIMIZED Data generator for Darcy 1D dataset with support for variable sensors."""
+    
+    def __init__(self, dataset, sensor_indices, query_indices, device, params, grid_points):
         print("📊 Pre-loading and optimizing dataset...")
         
         # PRE-LOAD all data to GPU for maximum efficiency
@@ -131,32 +195,78 @@ class DarcyDataGenerator:
             self.u_data[i] = torch.tensor(train_data[i]['u'], device=device, dtype=torch.float32)
             self.s_data[i] = torch.tensor(train_data[i]['s'], device=device, dtype=torch.float32)
         
-        self.sensor_indices = sensor_indices.to(device)
         self.query_indices = query_indices.to(device)
         self.device = device
         self.n_train = n_train
+        self.params = params
+        self.grid_points = grid_points.to(device)
+        self.n_grid = n_grid
+        self.input_range = params.get('input_range', [0, 1])  # Domain range for continuous sampling
         
-        # Pre-extract sensor and query data for even faster access
-        self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
+        # Pre-extract query data (always fixed)
         self.s_queries = self.s_data[:, self.query_indices]   # [n_train, n_queries]
         
-        print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU")
+        if not params['variable_sensors']:
+            # Fixed sensors: pre-extract sensor data for efficiency
+            self.sensor_indices = sensor_indices.to(device)
+            self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
+            print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (FIXED sensors)")
+        else:
+            # Variable sensors: don't pre-extract sensor data (will interpolate dynamically)
+            self.sensor_indices = None
+            self.u_sensors = None
+            print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (VARIABLE sensors with interpolation)")
         
     def generate_batch(self, batch_size):
         """OPTIMIZED: Generate a batch using pre-loaded GPU data."""
         # Random sampling directly on GPU (much faster)
         indices = torch.randint(0, self.n_train, (batch_size,), device=self.device)
         
-        # Direct indexing into pre-loaded GPU tensors (extremely fast)
-        u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
+        if not self.params['variable_sensors']:
+            # Fixed sensors: use pre-extracted sensor data
+            u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
+            current_sensor_indices = self.sensor_indices
+        else:
+            # Variable sensors: generate new CONTINUOUS random sensor locations for this batch
+            from Data.data_utils import sample_variable_sensor_points
+            
+            # Generate truly random sensor locations from continuous domain [0,1]
+            current_sensor_x = sample_variable_sensor_points(
+                self.params['sensor_size'], 
+                self.input_range, 
+                self.device
+            ).squeeze(-1)  # [n_sensors] - remove the last dimension for interpolation
+            
+            # Interpolate sensor values at these arbitrary continuous locations
+            # This is the key improvement: we're not limited to grid points anymore!
+            u_batch = self.u_data[indices]  # [batch_size, n_grid]
+            u_at_sensors = interpolate_sensor_values(
+                u_batch, 
+                self.grid_points, 
+                current_sensor_x, 
+                self.device
+            )  # [batch_size, n_sensors]
+            
+            # Convert back to the expected format for return
+            current_sensor_x = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
+        
+        # Query data is always the same
         s_at_queries = self.s_queries[indices]  # [batch_size, n_queries]
         
-        return u_at_sensors, s_at_queries
+        # Return sensor locations along with data for variable sensors
+        if self.params['variable_sensors']:
+            return u_at_sensors, s_at_queries, current_sensor_x
+        else:
+            return u_at_sensors, s_at_queries
 
 def train_darcy_model(setonet_model, args, data_generator, sensor_x, query_x, device, log_dir):
     """Train SetONet model on Darcy data with OPTIMIZED data loading."""
+    params = data_generator.params
+    sensor_mode = "VARIABLE (continuous)" if params['variable_sensors'] else "FIXED"
     print(f"\n--- Training Darcy 1D Model ---")
-    print(f"Training with {len(sensor_x)} FIXED sensor locations and {len(query_x)} query points")
+    print(f"Training with {len(sensor_x)} {sensor_mode} sensor locations and {len(query_x)} query points")
+    if params['variable_sensors']:
+        print("🔄 Sensor locations will be sampled from continuous domain [0,1] with interpolation (more challenging training)")
     print(f"⚡ EFFICIENCY: Pre-loaded GPU data for faster training, {args.son_epochs} epochs, batch_size={args.batch_size}")
     
     # Initialize TensorBoard writer if log_dir is provided
@@ -179,16 +289,26 @@ def train_darcy_model(setonet_model, args, data_generator, sensor_x, query_x, de
     for epoch in epoch_pbar:
         setonet_model.train()
         
-        # Generate batch
-        u_at_sensors, s_at_queries = data_generator.generate_batch(args.batch_size)
+        # Generate batch - handle both fixed and variable sensors
+        batch_data = data_generator.generate_batch(args.batch_size)
+        
+        if params['variable_sensors']:
+            # Variable sensors: unpack sensor locations along with data
+            u_at_sensors, s_at_queries, current_sensor_x = batch_data
+            # Use the current batch's sensor locations
+            batch_sensor_x = current_sensor_x
+        else:
+            # Fixed sensors: use the same sensor locations
+            u_at_sensors, s_at_queries = batch_data
+            batch_sensor_x = sensor_x
         
         # Prepare inputs for SetONet
         batch_size = u_at_sensors.shape[0]
-        n_sensors = sensor_x.shape[0]
+        n_sensors = batch_sensor_x.shape[0]
         n_queries = query_x.shape[0]
         
         # Expand sensor and query locations for batch
-        xs = sensor_x.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, n_sensors, 1]
+        xs = batch_sensor_x.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, n_sensors, 1]
         ys = query_x.unsqueeze(0).expand(batch_size, -1, -1)   # [batch_size, n_queries, 1]
         us = u_at_sensors.unsqueeze(-1)  # [batch_size, n_sensors, 1]
         
@@ -247,10 +367,14 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
     batch_size = params['batch_size_train']
     
     print(f"\n--- Evaluating Darcy 1D Model ---")
-    print(f"Evaluation using SAME {len(sensor_x)} sensor locations and {len(query_x)} query points as training")
+    if params['variable_sensors']:
+        print(f"Evaluation using FIXED {len(sensor_x)} sensor locations (even though training used continuous variable sensors)")
+        print("Note: For fair comparison, evaluation always uses the same fixed sensor locations")
+    else:
+        print(f"Evaluation using SAME {len(sensor_x)} sensor locations and {len(query_x)} query points as training")
     # Verify sensor consistency
     assert len(sensor_indices) == params['sensor_size'], f"Sensor count mismatch: {len(sensor_indices)} vs {params['sensor_size']}"
-    print(f"✓ Sensor configuration verified: {len(sensor_indices)} sensors at same locations as training")
+    print(f"✓ Sensor configuration verified: {len(sensor_indices)} sensors at evaluation locations")
     
     # OPTIMIZATION: Pre-load all test data to GPU
     print("📊 Pre-loading test data to GPU...")
@@ -407,8 +531,11 @@ def main():
     sensor_x, sensor_indices = create_sensor_points(params, device, grid_points)
     query_x, query_indices = create_query_points(params, device, grid_points, args.n_query_points)
     
-    print(f"Sensor points: {len(sensor_x)} (FIXED - same for train & test)")
-    print(f"Query points: {len(query_x)} (FIXED - same for train & test)")
+    if params['variable_sensors']:
+        print(f"Sensor points: {len(sensor_x)} (CONTINUOUS VARIABLE during training, FIXED during evaluation)")
+    else:
+        print(f"Sensor points: {len(sensor_x)} (FIXED for both training & evaluation)")
+    print(f"Query points: {len(query_x)} (FIXED for both training & evaluation)")
     print(f"Sensor indices: {sensor_indices[:5]}... to {sensor_indices[-5:]}")
     print(f"Query indices: {query_indices[:5]}... to {query_indices[-5:]}")
     
@@ -419,7 +546,7 @@ def main():
     model_was_loaded = load_pretrained_model(setonet_model, args, device)
     
     # Create data generator (uses SAME sensor_indices for training)
-    data_generator = DarcyDataGenerator(dataset, sensor_indices, query_indices, device)
+    data_generator = DarcyDataGenerator(dataset, sensor_indices, query_indices, device, params, grid_points)
     
     # Training (uses SAME sensor_x and sensor_indices as testing)
     if not model_was_loaded:
