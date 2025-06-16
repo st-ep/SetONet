@@ -293,7 +293,10 @@ def plot_darcy_comparison(
     plot_filename_prefix="darcy_1d",
     sensor_dropoff: float = 0.0,
     replace_with_nearest: bool = False,
-    dataset_split="test"
+    dataset_split="test",
+    batch_size=64,  # Add batch_size parameter to determine sample spacing
+    variable_sensors=False,  # Add parameter to handle variable sensor plotting
+    grid_points=None  # Grid points for variable sensor interpolation
 ):
     """
     Plots comparison between true and predicted solutions for Darcy 1D dataset.
@@ -302,9 +305,9 @@ def plot_darcy_comparison(
     Args:
         model_to_use: Trained SetONet model
         dataset: Darcy 1D dataset (HuggingFace dataset)
-        sensor_x: Sensor locations [n_sensors, 1]
+        sensor_x: Sensor locations [n_sensors, 1] (used for test plots or when variable_sensors=False)
         query_x: Query locations [n_queries, 1] 
-        sensor_indices: Indices for sensor locations in the grid
+        sensor_indices: Indices for sensor locations in the grid (used when variable_sensors=False)
         query_indices: Indices for query locations in the grid
         log_dir: Directory to save plots
         num_samples_to_plot: Number of sample functions to plot
@@ -312,11 +315,21 @@ def plot_darcy_comparison(
         sensor_dropoff: Sensor drop-off rate to apply (same as evaluation)
         replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
         dataset_split: Which dataset split to use ("train" or "test")
+        batch_size: Batch size used during evaluation (to select samples from different batches)
+        variable_sensors: Whether variable sensors were used during training
+        grid_points: Grid points for variable sensor interpolation (required if variable_sensors=True)
     """
     print(f"Generating Darcy 1D plots with {len(sensor_x)} sensor points and {len(query_x)} query points...")
     if sensor_dropoff > 0:
         replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
         print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
+    
+    # Print sensor mode for clarity
+    if variable_sensors:
+        print(f"🔄 Using VARIABLE sensor locations for both train and test plots (same as training/evaluation)")
+        print(f"Note: Each plot will show different random sensor locations, reflecting actual model usage")
+    else:
+        print(f"📍 Using FIXED sensor locations for both train and test plots")
     
     model_to_use.eval()
     device = next(model_to_use.parameters()).device
@@ -328,33 +341,102 @@ def plot_darcy_comparison(
     # Get data from specified split
     split_data = dataset[dataset_split]
     n_available = len(split_data)
-    n_to_plot = min(num_samples_to_plot, n_available)
+    
+    # Select samples from different batches to get diverse sensor dropout patterns
+    # This ensures we see different sensor configurations when dropout is applied
+    sample_indices = []
+    for i in range(num_samples_to_plot):
+        # Select first sample from each batch: batch_i * batch_size + 0
+        sample_idx = i * batch_size
+        if sample_idx < n_available:
+            sample_indices.append(sample_idx)
+        else:
+            # Fall back to sequential if we run out of batches
+            sample_indices.append(i)
+    
+    n_to_plot = len(sample_indices)
     
     print(f"Plotting {n_to_plot} samples from {dataset_split} set")
+    print(f"Sample indices: {sample_indices} (from different batches for diverse sensor patterns)")
     
-    # Convert locations to CPU for plotting
-    sensor_x_cpu = sensor_x.cpu()
+    # Convert query locations to CPU for plotting
     query_x_cpu = query_x.cpu().squeeze()
 
-    for i in range(n_to_plot):
+    for plot_idx, sample_idx in enumerate(sample_indices):
         fig, axs = plt.subplots(1, 2, figsize=(14, 6), squeeze=False)
 
         # Get sample data
-        sample = split_data[i]
+        sample = split_data[sample_idx]
         x_grid = torch.tensor(sample['X'], dtype=torch.float32)
         u_full = torch.tensor(sample['u'], dtype=torch.float32).to(device)
         s_full = torch.tensor(sample['s'], dtype=torch.float32).to(device)
         
-        # Get values at sensor and query locations
-        u_at_sensors_true = u_full[sensor_indices]
+        # Determine sensor locations based on variable_sensors and dataset_split
+        if variable_sensors and dataset_split == "train":
+            # TRAIN plots with variable sensors: Generate new random sensor locations for each sample
+            # This reflects what actually happens during training
+            from Data.data_utils import sample_variable_sensor_points
+            
+            # Generate random sensor locations from continuous domain [0,1] (same as training)
+            current_sensor_x = sample_variable_sensor_points(
+                len(sensor_x), 
+                [0, 1],  # Darcy domain
+                device
+            ).squeeze(-1)  # [n_sensors] for interpolation
+            
+            # Interpolate sensor values at these arbitrary locations
+            # We need to import the interpolation function from the Darcy script
+            from Benchmarks.run_darcy_1d import interpolate_sensor_values
+            u_at_sensors_true = interpolate_sensor_values(
+                u_full.unsqueeze(0), 
+                grid_points.to(device), 
+                current_sensor_x, 
+                device
+            ).squeeze(0)  # Remove batch dimension
+            
+            # Convert sensor locations for plotting and model input
+            current_sensor_x = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
+            sensor_x_for_plot = current_sensor_x
+            sensor_indices_for_plot = None  # Not applicable for variable sensors
+        elif variable_sensors and dataset_split == "test":
+            # TEST plots with variable sensors: Also generate random sensor locations
+            # This reflects what actually happens during evaluation (now that we fixed it)
+            from Data.data_utils import sample_variable_sensor_points
+            
+            # Generate random sensor locations from continuous domain [0,1] (same as evaluation)
+            current_sensor_x = sample_variable_sensor_points(
+                len(sensor_x), 
+                [0, 1],  # Darcy domain
+                device
+            ).squeeze(-1)  # [n_sensors] for interpolation
+            
+            # Interpolate sensor values at these arbitrary locations
+            from Benchmarks.run_darcy_1d import interpolate_sensor_values
+            u_at_sensors_true = interpolate_sensor_values(
+                u_full.unsqueeze(0), 
+                grid_points.to(device), 
+                current_sensor_x, 
+                device
+            ).squeeze(0)  # Remove batch dimension
+            
+            # Convert sensor locations for plotting and model input
+            current_sensor_x = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
+            sensor_x_for_plot = current_sensor_x
+            sensor_indices_for_plot = None  # Not applicable for variable sensors
+        else:
+            # FIXED sensors: Use the provided fixed sensor locations
+            u_at_sensors_true = u_full[sensor_indices]
+            sensor_x_for_plot = sensor_x
+            sensor_indices_for_plot = sensor_indices
+        
         s_at_queries_true = s_full[query_indices]
 
         # Apply sensor drop-off if specified (same as evaluation)
         if sensor_dropoff > 0.0:
             from Data.data_utils import apply_sensor_dropoff
             
-            # Apply drop-off to sensor data
-            sensor_x_device = sensor_x.clone().to(device)
+            # Apply drop-off to sensor data using the correct sensor locations
+            sensor_x_device = sensor_x_for_plot.clone().to(device)
             sensor_locs_dropped, sensor_values_dropped = apply_sensor_dropoff(
                 sensor_x_device, u_at_sensors_true, sensor_dropoff, replace_with_nearest
             )
@@ -368,12 +450,12 @@ def plot_darcy_comparison(
             u_at_sensors_model = sensor_values_dropped
             actual_n_sensors = len(sensor_x_plot)
         else:
-            # No drop-off
-            sensor_x_plot = sensor_x_cpu
+            # No drop-off - use the determined sensor locations
+            sensor_x_plot = sensor_x_for_plot.cpu()
             u_at_sensors_plot = u_at_sensors_true.cpu().numpy()
-            sensor_x_model = sensor_x
+            sensor_x_model = sensor_x_for_plot
             u_at_sensors_model = u_at_sensors_true
-            actual_n_sensors = len(sensor_x_cpu)
+            actual_n_sensors = len(sensor_x_plot)
 
         # Plot input source term u(x) with sensor points (left subplot)
         axs[0, 0].plot(x_grid.cpu(), u_full.cpu(), 'b-', linewidth=2, label='Input Source Term $u(x)$')
@@ -414,7 +496,13 @@ def plot_darcy_comparison(
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel('$u(x)$')
-        axs[0, 0].set_title(f'Input Source Term $u(x)$ (Sample {i+1})')
+        
+        # Create title that reflects sensor type
+        if variable_sensors:
+            title_suffix = f"(Sample {sample_idx}, Variable Sensors)"
+        else:
+            title_suffix = f"(Sample {sample_idx}, Fixed Sensors)"
+        axs[0, 0].set_title(f'Input Source Term $u(x)$ {title_suffix}')
         axs[0, 0].grid(True, alpha=0.3)
         axs[0, 0].legend()
 
@@ -443,7 +531,7 @@ def plot_darcy_comparison(
         axs[0, 1].plot(query_x_cpu, s_at_queries_pred, 'r--', linewidth=2, label='SetONet Prediction')
         axs[0, 1].set_xlabel('$x$')
         axs[0, 1].set_ylabel('$s(x)$')
-        axs[0, 1].set_title(f'Output: True vs Predicted $s(x)$ (Sample {i+1})')
+        axs[0, 1].set_title(f'Output: True vs Predicted $s(x)$ {title_suffix}')
         axs[0, 1].grid(True, alpha=0.3)
         axs[0, 1].legend()
 
@@ -452,7 +540,7 @@ def plot_darcy_comparison(
         # Save plot
         replacement_suffix = "_nearest" if replace_with_nearest and sensor_dropoff > 0 else ""
         dropoff_suffix = f"_dropoff_{sensor_dropoff:.1f}{replacement_suffix}" if sensor_dropoff > 0 else ""
-        save_path = os.path.join(log_dir, f"{plot_filename_prefix}_{dataset_split}_sample_{i+1}{dropoff_suffix}.png")
+        save_path = os.path.join(log_dir, f"{plot_filename_prefix}_{dataset_split}_sample_{sample_idx}_plot_{plot_idx+1}{dropoff_suffix}.png")
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Saved Darcy 1D {dataset_split} plot for sample {i+1} to {save_path}")
+        print(f"Saved Darcy 1D {dataset_split} plot for sample {sample_idx} (plot {plot_idx+1}) to {save_path}")
         plt.close(fig) 

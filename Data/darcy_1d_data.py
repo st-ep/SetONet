@@ -99,8 +99,8 @@ class Darcy1DSolver:
 
 
 if __name__ == "__main__":
-    train_size = 1000
-    test_size = 100
+    train_size = 10000
+    test_size = 1000
     ds_size = train_size + test_size
     np.random.seed(42)
     
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     save_dir = "/home/titanv/Stepan/setprojects/SetONet/Data/"
     os.makedirs(save_dir, exist_ok=True)  # Create directory if it doesn't exist
     
-    solver = Darcy1DSolver(nx=300)  # Changed from nx=100 to nx=300 for 301 grid points
+    solver = Darcy1DSolver(nx=500)  # Changed from nx=100 to nx=300 for 301 grid points
     gen = iter(solver)
     
     def sample_generator(ds_size):
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     ds = ds.train_test_split(test_size=test_size, shuffle=False)
     
     # Save dataset with updated name to distinguish from 101-point version
-    dataset_path = os.path.join(save_dir, "darcy_1d_dataset_301")
+    dataset_path = os.path.join(save_dir, "darcy_1d_dataset_501")
     ds.save_to_disk(dataset_path)
     
     print(f"Dataset created successfully!")
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     plt.legend()
     
     plt.tight_layout()
-    plot_path = os.path.join(save_dir, 'darcy_sample_301.png')
+    plot_path = os.path.join(save_dir, 'darcy_sample_501.png')
     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     plt.show()
     print(f"Sample plot saved to: {plot_path}") 
