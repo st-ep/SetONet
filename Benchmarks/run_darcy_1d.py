@@ -134,9 +134,6 @@ def interpolate_sensor_values(u_data, grid_points, sensor_locations, device):
     Returns:
         u_interpolated: [n_samples, n_sensors] - Interpolated values at sensor locations
     """
-    n_samples, n_grid = u_data.shape
-    n_sensors = sensor_locations.shape[0]
-    
     # Ensure all tensors are on the same device
     grid_points = grid_points.to(device)
     sensor_locations = sensor_locations.to(device)
@@ -225,7 +222,6 @@ class DarcyDataGenerator:
         if not self.params['variable_sensors']:
             # Fixed sensors: use pre-extracted sensor data
             u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
-            current_sensor_indices = self.sensor_indices
         else:
             # Variable sensors: generate new CONTINUOUS random sensor locations for this batch
             from Data.data_utils import sample_variable_sensor_points
@@ -304,8 +300,6 @@ def train_darcy_model(setonet_model, args, data_generator, sensor_x, query_x, de
         
         # Prepare inputs for SetONet
         batch_size = u_at_sensors.shape[0]
-        n_sensors = batch_sensor_x.shape[0]
-        n_queries = query_x.shape[0]
         
         # Expand sensor and query locations for batch
         xs = batch_sensor_x.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, n_sensors, 1]
@@ -451,7 +445,6 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
                 sensor_x_used = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
             
             u_at_sensors_used = u_at_sensors
-            actual_n_sensors = len(sensor_x_used)
             
             # Apply sensor dropout if specified
             if params.get('eval_sensor_dropoff', 0.0) > 0.0:
@@ -477,7 +470,6 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
                 # Use the sensor locations from the first sample (they should be the same anyway for fixed dropout)
                 sensor_x_used = sensor_x_batch_list[0]
                 u_at_sensors_used = torch.stack(u_at_sensors_batch_list, dim=0)
-                actual_n_sensors = len(sensor_x_used)
             
             # Prepare inputs for SetONet
             xs = sensor_x_used.unsqueeze(0).expand(current_batch_size, -1, -1)
@@ -585,10 +577,6 @@ def main():
         raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
     
     print(f"Training SetONet for Darcy 1D equation")
-    if args.eval_sensor_dropoff > 0:
-        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
-        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using {replacement_mode}")
-        print("(Training will use full sensor data)")
     
     # Load dataset
     dataset = load_darcy_dataset(args.data_path)
