@@ -38,11 +38,23 @@ def create_setonet_model(args, device):
     # Get the activation function
     activation_fn = get_activation_function(args.activation_fn)
     
+    # Determine input/output dimensions based on benchmark
+    if args.benchmark == 'chladni':
+        # Chladni uses 2D coordinates (x, y)
+        input_size_src = 2
+        input_size_tgt = 2
+        print("Using 2D coordinates for Chladni plate problem")
+    else:
+        # Default to 1D (Darcy, derivative, integral problems)
+        input_size_src = 1
+        input_size_tgt = 1
+        print("Using 1D coordinates for problem")
+    
     # SetONet model arguments
     setonet_args = dict(
-        input_size_src=1,
+        input_size_src=input_size_src,
         output_size_src=1,
-        input_size_tgt=1,
+        input_size_tgt=input_size_tgt,
         output_size_tgt=1,
         p=args.son_p_dim,
         phi_hidden_size=args.son_phi_hidden,

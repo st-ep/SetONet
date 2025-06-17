@@ -79,7 +79,6 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
         },
         "problem_parameters": {
             "input_range": params['input_range'],
-            "scale": params['scale'],
             "sensor_size": params['sensor_size'],
             "batch_size_train": params['batch_size_train'],
             "n_trunk_points_train": params['n_trunk_points_train'],
@@ -90,13 +89,6 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
             "sensor_distribution": "variable_per_batch" if params.get('variable_sensors', False) else "fixed_random_sorted",
             "sensor_seed": params.get('sensor_seed', 42),
             "variable_sensors": params.get('variable_sensors', False)
-        },
-        "data_generation": {
-            "coefficient_distribution": "uniform",
-            "coefficient_range": f"[-{params['scale']}, {params['scale']}]",
-            "integration_constant": "zero (constant_zero=True)",
-            "sensor_point_distribution": "random_uniform_sorted",
-            "trunk_point_distribution": "uniform_linspace"
         },
         "file_paths": {
             "load_model_path": getattr(args, 'load_model_path', None),
@@ -116,6 +108,17 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
             ]
         }
     }
+    
+    # Add scale parameter if it exists (for derivative/integral benchmarks)
+    if 'scale' in params:
+        config["problem_parameters"]["scale"] = params['scale']
+        config["data_generation"] = {
+            "coefficient_distribution": "uniform",
+            "coefficient_range": f"[-{params['scale']}, {params['scale']}]",
+            "integration_constant": "zero (constant_zero=True)",
+            "sensor_point_distribution": "random_uniform_sorted",
+            "trunk_point_distribution": "uniform_linspace"
+        }
     
     # Handle legacy cycle consistency parameters
     if hasattr(args, 'lambda_cycle'):

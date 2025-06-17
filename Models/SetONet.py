@@ -361,6 +361,10 @@ class SetONet(torch.nn.Module):
             estimated_G_u_ys = self.forward(xs, us, ys)
             prediction_loss = torch.nn.MSELoss()(estimated_G_u_ys, G_u_ys)
 
+            # Calculate relative L2 error for progress bar
+            with torch.no_grad():
+                rel_l2_error = torch.norm(estimated_G_u_ys - G_u_ys) / torch.norm(G_u_ys)
+
             # add loss components (can add regularization later if needed)
             loss = prediction_loss
 
@@ -375,8 +379,8 @@ class SetONet(torch.nn.Module):
 
             # update progress bar
             if progress_bar:
-                # Display current LR in the progress bar
-                bar.set_description(f"Step {self.total_steps} | Loss: {loss.item():.4e} | Grad Norm: {norm:.2f} | LR: {current_lr:.2e}")
+                # Display current LR and relative L2 error in the progress bar
+                bar.set_description(f"Step {self.total_steps} | Loss: {loss.item():.4e} | Rel L2: {rel_l2_error.item():.4f} | Grad Norm: {norm:.2f} | LR: {current_lr:.2e}")
 
             # callbacks
             if callback is not None:
