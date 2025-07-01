@@ -24,8 +24,8 @@ def generate_chladni_data():
     # 1) Basic Setup
     L = 8.75 * 0.0254   # Dimensions in meters
     M = 8.75 * 0.0254
-    omega = 55 * np.pi / M  # Frequency
-    t_fixed = 4             # Time at which to evaluate the solution
+    omega = 50 * np.pi / M  # Frequency
+    t_fixed = 6             # Time at which to evaluate the solution
     
     gamma = 0.02  # damping_adjustment
     v = 0.5
@@ -34,8 +34,8 @@ def generate_chladni_data():
     x = np.linspace(0, L, numPoints)
     y = np.linspace(0, M, numPoints)
     
-    n_range = 10
-    m_range = 10
+    n_range = 6
+    m_range = 6
     
     N_total = 11000   # total number of samples
     N_train = 10000   # number of training samples
