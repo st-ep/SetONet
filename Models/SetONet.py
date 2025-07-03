@@ -3,6 +3,7 @@ import torch.nn as nn
 from FunctionEncoder import BaseDataset, BaseCallback # Keep BaseDataset/Callback if used
 from tqdm import trange
 from torch.optim.lr_scheduler import _LRScheduler # Import base class for type hinting if needed
+from .utils.helper_utils import calculate_l2_relative_error
 
 # This implements a DeepOSet using PyTorch
 class SetONet(torch.nn.Module):
@@ -361,6 +362,13 @@ class SetONet(torch.nn.Module):
             estimated_G_u_ys = self.forward(xs, us, ys)
             prediction_loss = torch.nn.MSELoss()(estimated_G_u_ys, G_u_ys)
 
+            # Calculate relative L2 error for progress bar
+            with torch.no_grad():
+                # Reshape to (batch_size, n_points) for helper function if needed
+                pred_flat = estimated_G_u_ys.squeeze(-1) if estimated_G_u_ys.shape[-1] == 1 else estimated_G_u_ys.view(estimated_G_u_ys.shape[0], -1)
+                target_flat = G_u_ys.squeeze(-1) if G_u_ys.shape[-1] == 1 else G_u_ys.view(G_u_ys.shape[0], -1)
+                rel_l2_error = calculate_l2_relative_error(pred_flat, target_flat)
+
             # add loss components (can add regularization later if needed)
             loss = prediction_loss
 
@@ -375,8 +383,8 @@ class SetONet(torch.nn.Module):
 
             # update progress bar
             if progress_bar:
-                # Display current LR in the progress bar
-                bar.set_description(f"Step {self.total_steps} | Loss: {loss.item():.4e} | Grad Norm: {norm:.2f} | LR: {current_lr:.2e}")
+                # Display current LR and relative L2 error in the progress bar
+                bar.set_description(f"Step {self.total_steps} | Loss: {loss.item():.4e} | Rel L2: {rel_l2_error.item():.4f} | Grad Norm: {norm:.2f} | LR: {current_lr:.2e}")
 
             # callbacks
             if callback is not None:

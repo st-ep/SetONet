@@ -14,16 +14,17 @@ def sample_variable_sensor_points(sensor_size, input_range, device):
     sensor_x = sensor_x.sort()[0]  # Sort for consistency
     return sensor_x.view(-1, 1)
 
-def apply_sensor_dropoff(sensor_x, sensor_values, dropoff_rate, replace_with_nearest=False):
+def apply_sensor_dropoff(sensor_x, sensor_values, dropoff_rate, replace_with_nearest=False, random_seed=None):
     """
     Randomly drops sensors based on the specified drop-off rate.
     
     Args:
-        sensor_x: Sensor locations [n_sensors, 1]
+        sensor_x: Sensor locations [n_sensors, coord_dim] (1D, 2D, or higher dimensional)
         sensor_values: Sensor values [batch_size, n_sensors] or [n_sensors]
         dropoff_rate: Fraction of sensors to drop (0.0 to 1.0)
         replace_with_nearest: If True, replace dropped sensors with nearest remaining sensors
                              instead of removing them entirely (creates duplicate sensor pairs)
+                             Uses Euclidean distance for multi-dimensional coordinates
     
     Returns:
         Tuple of (processed_sensor_x, processed_sensor_values)
@@ -65,11 +66,19 @@ def apply_sensor_dropoff(sensor_x, sensor_values, dropoff_rate, replace_with_nea
         processed_sensor_values = sensor_values.clone()
         
         # Vectorized nearest neighbor replacement for (location, value) pairs
-        keep_positions = sensor_x[keep_indices].squeeze()  # [n_keep]
-        drop_positions = sensor_x[drop_indices].squeeze()  # [n_drop]
+        keep_positions = sensor_x[keep_indices]  # [n_keep, coord_dim]
+        drop_positions = sensor_x[drop_indices]  # [n_drop, coord_dim]
         
         # Calculate distances: [n_drop, n_keep]
-        distances = torch.abs(drop_positions.unsqueeze(1) - keep_positions.unsqueeze(0))
+        if sensor_x.shape[1] == 1:
+            # 1D coordinates: use absolute distance
+            distances = torch.abs(drop_positions.unsqueeze(1) - keep_positions.unsqueeze(0)).squeeze(-1)
+        else:
+            # Multi-dimensional coordinates: use Euclidean distance
+            # drop_positions: [n_drop, coord_dim] -> [n_drop, 1, coord_dim]
+            # keep_positions: [n_keep, coord_dim] -> [1, n_keep, coord_dim]
+            diff = drop_positions.unsqueeze(1) - keep_positions.unsqueeze(0)  # [n_drop, n_keep, coord_dim]
+            distances = torch.norm(diff, dim=2)  # [n_drop, n_keep]
         
         # Find nearest keep indices for each drop index: [n_drop]
         nearest_keep_local_indices = torch.argmin(distances, dim=1)
@@ -82,9 +91,12 @@ def apply_sensor_dropoff(sensor_x, sensor_values, dropoff_rate, replace_with_nea
             print(f"Nearest remaining indices: {nearest_keep_global_indices.tolist()}")
             for i, (drop_idx, nearest_idx) in enumerate(zip(drop_indices, nearest_keep_global_indices)):
                 if i < 3:  # Only show first 3 for brevity
-                    orig_pos = sensor_x[drop_idx].item()
-                    nearest_pos = sensor_x[nearest_idx].item()
-                    print(f"  Sensor {drop_idx.item()} at x={orig_pos:.3f} -> replaced with sensor {nearest_idx.item()} at x={nearest_pos:.3f}")
+                    orig_pos = sensor_x[drop_idx]
+                    nearest_pos = sensor_x[nearest_idx]
+                    if sensor_x.shape[1] == 1:
+                        print(f"  Sensor {drop_idx.item()} at x={orig_pos.item():.3f} -> replaced with sensor {nearest_idx.item()} at x={nearest_pos.item():.3f}")
+                    else:
+                        print(f"  Sensor {drop_idx.item()} at {orig_pos.tolist()} -> replaced with sensor {nearest_idx.item()} at {nearest_pos.tolist()}")
         
         # Replace BOTH positions and values as pairs (this leverages permutation invariance)
         # Example: if sensor 2 is dropped and sensor 3 is nearest:

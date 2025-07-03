@@ -5,7 +5,6 @@ import os
 from datetime import datetime 
 import argparse
 from datasets import load_from_disk
-import matplotlib.pyplot as plt
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
@@ -17,6 +16,7 @@ if project_root not in sys.path:
 from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
+from Plotting.plot_chladni_utils import plot_chladni_results
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -38,7 +38,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
+    parser.add_argument('--son_epochs', type=int, default=175000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
@@ -48,6 +48,10 @@ def parse_arguments():
     
     # Model loading
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    
+    # Evaluation robustness testing (sensor failures)
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
+    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
     
     return parser.parse_args()
 
@@ -168,11 +172,17 @@ def create_model(args, device):
     
     return model
 
-def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100):
+def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0, replace_with_nearest=False):
     """Evaluate the model on test data."""
     model.eval()
     test_data = dataset['test']
     n_test = min(n_test_samples, len(test_data))
+    
+    # Print sensor dropout configuration
+    if eval_sensor_dropoff > 0:
+        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
+        print(f"Applying sensor drop-off rate: {eval_sensor_dropoff:.1%} with {replacement_mode}")
+        print("(This tests model robustness to sensor failures)")
     
     total_loss = 0.0
     total_rel_error = 0.0
@@ -194,8 +204,26 @@ def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100):
             target_norm = torch.tensor(sample['s'], dtype=torch.float32, device=device).unsqueeze(0)
             target = target_norm.unsqueeze(-1)
             
+            # Apply sensor dropout if specified
+            xs_used = xs
+            us_used = us
+            if eval_sensor_dropoff > 0.0:
+                from Data.data_utils import apply_sensor_dropoff
+                
+                # Apply dropout to sensor data (remove batch dimension for dropout function)
+                xs_dropped, us_dropped = apply_sensor_dropoff(
+                    xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
+                    us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
+                    eval_sensor_dropoff,
+                    replace_with_nearest
+                )
+                
+                # Add batch dimension back
+                xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
+                us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
+            
             # Forward pass
-            pred_norm = model(xs, us, ys)
+            pred_norm = model(xs_used, us_used, ys)
             
             # Calculate metrics
             mse_loss = torch.nn.MSELoss()(pred_norm, target)
@@ -207,119 +235,14 @@ def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100):
     avg_loss = total_loss / n_test
     avg_rel_error = total_rel_error / n_test
     
-    print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
+    if eval_sensor_dropoff > 0.0:
+        replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
+        print(f"Test Results with {eval_sensor_dropoff:.1%} sensor dropout ({replacement_mode}) - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
+    else:
+        print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
     
     model.train()
     return avg_loss, avg_rel_error
-
-def plot_results(model, dataset, chladni_dataset, device, sample_idx=0, save_path=None):
-    """Plot input forces, predicted displacements, and ground truth."""
-    model.eval()
-    test_data = dataset['test']
-    sample = test_data[sample_idx]
-    
-    # Load pre-normalized data
-    xs_norm = torch.tensor(sample['X'], dtype=torch.float32, device=device)
-    xs = xs_norm.unsqueeze(0)
-    
-    us_norm = torch.tensor(sample['u'], dtype=torch.float32, device=device).unsqueeze(0)
-    us = us_norm.unsqueeze(-1)
-    
-    ys_norm = torch.tensor(sample['Y'], dtype=torch.float32, device=device)
-    ys = ys_norm.unsqueeze(0)
-    
-    target_norm = torch.tensor(sample['s'], dtype=torch.float32, device=device).unsqueeze(0)
-    
-    # Get prediction and denormalize
-    with torch.no_grad():
-        pred_norm = model(xs, us, ys)
-        pred_orig = chladni_dataset.denormalize_displacement(pred_norm.squeeze(-1))
-    
-    # Use original data if available, otherwise denormalize
-    if 'u_orig' in sample:
-        forces_orig = torch.tensor(sample['u_orig'], dtype=torch.float32, device=device)
-        target_orig = torch.tensor(sample['s_orig'], dtype=torch.float32, device=device)
-        coords_orig = torch.tensor(sample['X_orig'], dtype=torch.float32, device=device)
-    else:
-        forces_orig = chladni_dataset.denormalize_force(us_norm.squeeze(0))
-        target_orig = chladni_dataset.denormalize_displacement(target_norm.squeeze(0))
-        coords_orig = chladni_dataset.denormalize_coordinates(xs_norm)
-    
-    # Reshape to 2D grid
-    grid_size = int(np.sqrt(len(sample['X'])))
-    coords = coords_orig.cpu().numpy()
-    x_coords = coords[:, 0].reshape(grid_size, grid_size)
-    y_coords = coords[:, 1].reshape(grid_size, grid_size)
-    
-    forces_2d = forces_orig.cpu().numpy().reshape(grid_size, grid_size)
-    pred_2d = pred_orig.cpu().numpy().reshape(grid_size, grid_size)
-    target_2d = target_orig.cpu().numpy().reshape(grid_size, grid_size)
-    
-    # Create plot
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
-    # Input forces
-    im1 = axes[0].contourf(x_coords, y_coords, forces_2d, levels=20, cmap='RdBu_r')
-    axes[0].set_title(f'Input Forces - Sample {sample_idx}')
-    axes[0].set_xlabel('X (m)')
-    axes[0].set_ylabel('Y (m)')
-    plt.colorbar(im1, ax=axes[0])
-    
-    # Predicted displacements
-    im2 = axes[1].contourf(x_coords, y_coords, pred_2d, levels=20, cmap='viridis')
-    axes[1].set_title('Predicted Displacements')
-    axes[1].set_xlabel('X (m)')
-    axes[1].set_ylabel('Y (m)')
-    plt.colorbar(im2, ax=axes[1])
-    
-    # Ground truth displacements
-    im3 = axes[2].contourf(x_coords, y_coords, target_2d, levels=20, cmap='viridis')
-    axes[2].set_title('Ground Truth Displacements')
-    axes[2].set_xlabel('X (m)')
-    axes[2].set_ylabel('Y (m)')
-    plt.colorbar(im3, ax=axes[2])
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    
-    plt.show()
-    
-    # Error metrics
-    mse_error = np.mean((pred_2d - target_2d)**2)
-    rel_error = np.linalg.norm(pred_2d - target_2d) / np.linalg.norm(target_2d)
-    print(f"Sample {sample_idx} - MSE: {mse_error:.6e}, Rel Error: {rel_error:.6f}")
-    
-    model.train()
-
-def debug_data_shapes(model, dataset, chladni_dataset, device):
-    """Debug function to print data shapes and verify model compatibility."""
-    print("\n" + "="*40)
-    print("Data Shape Verification")
-    print("="*40)
-    
-    # Check training data shape
-    xs, us, ys, G_u_ys, _ = chladni_dataset.sample(device=device)
-    print(f"Training batch shapes:")
-    print(f"  xs: {xs.shape}, us: {us.shape}, ys: {ys.shape}, G_u_ys: {G_u_ys.shape}")
-    
-    # Test model forward pass
-    model.eval()
-    with torch.no_grad():
-        try:
-            pred = model(xs, us, ys)
-            print(f"  Model output: {pred.shape} ✓")
-        except Exception as e:
-            print(f"  Model forward pass failed: {e}")
-    
-    # Check test data
-    test_sample = dataset['test'][0]
-    print(f"Test sample shapes:")
-    print(f"  X: {np.array(test_sample['X']).shape}, u: {np.array(test_sample['u']).shape}")
-    
-    model.train()
-    print("="*40)
 
 def main():
     """Main training function."""
@@ -327,6 +250,10 @@ def main():
     args = parse_arguments()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    
+    # Validate arguments
+    if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
+        raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
     
     # Setup logging
     log_dir = setup_logging(project_root)
@@ -357,35 +284,29 @@ def main():
         print(f"Loading pre-trained model from: {args.load_model_path}")
         model.load_state_dict(torch.load(args.load_model_path, map_location=device))
     
-    # Debug data shapes
-    debug_data_shapes(model, dataset, chladni_dataset, device)
-    
     # Train model
     print(f"\nStarting training for {args.son_epochs} epochs...")
-    
-    # Simple callback for relative L2 in progress bar
-    def rel_l2_callback(epoch, loss, model, xs, us, ys, targets):
-        with torch.no_grad():
-            pred = model(xs, us, ys)
-            rel_l2_error = calculate_l2_relative_error(pred, targets)
-            return {'rel_l2': rel_l2_error.item()}
     
     model.train_model(
         dataset=chladni_dataset,
         epochs=args.son_epochs,
         progress_bar=True,
-        callback=rel_l2_callback
+        callback=None
     )
     
     # Evaluate model
     print("\nEvaluating model...")
-    evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100)
+    evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
+                   eval_sensor_dropoff=args.eval_sensor_dropoff, 
+                   replace_with_nearest=args.replace_with_nearest)
     
     # Plot results
     print("Generating plots...")
     for i in range(3):
         plot_save_path = os.path.join(log_dir, f"chladni_results_sample_{i}.png")
-        plot_results(model, dataset, chladni_dataset, device, sample_idx=i, save_path=plot_save_path)
+        plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=i, save_path=plot_save_path,
+                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
+                            replace_with_nearest=args.replace_with_nearest)
     
     # Save model
     model_save_path = os.path.join(log_dir, "chladni_setonet_model.pth")
