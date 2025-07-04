@@ -30,13 +30,11 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
         from Data.data_utils import apply_sensor_dropoff
         
         # Apply dropout to sensor data (remove batch dimension for dropout function)
-        # Use sample index as random seed for reproducible dropout (same as evaluation)
         xs_dropped, us_dropped = apply_sensor_dropoff(
             xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
             us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
             eval_sensor_dropoff,
-            replace_with_nearest,
-            random_seed=sample_idx  # Use sample index for reproducible dropout
+            replace_with_nearest
         )
         
         # Add batch dimension back

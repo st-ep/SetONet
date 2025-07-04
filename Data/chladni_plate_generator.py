@@ -59,7 +59,7 @@ def generate_chladni_data():
     gamma = 0.02  # damping_adjustment
     v = 0.5
     
-    numPoints = 25
+    numPoints = 64
     x = np.linspace(0, L, numPoints)
     y = np.linspace(0, M, numPoints)
     
