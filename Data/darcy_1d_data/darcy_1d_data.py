@@ -104,8 +104,8 @@ if __name__ == "__main__":
     ds_size = train_size + test_size
     np.random.seed(42)
     
-    # Define save directory
-    save_dir = "/home/titanv/Stepan/setprojects/SetONet/Data/"
+    # Define save directory - updated to match new structure
+    save_dir = "/home/titanv/Stepan/setprojects/SetONet/Data/darcy_1d_data/"
     os.makedirs(save_dir, exist_ok=True)  # Create directory if it doesn't exist
     
     solver = Darcy1DSolver(nx=500)  # Changed from nx=100 to nx=300 for 301 grid points

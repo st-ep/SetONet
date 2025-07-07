@@ -4,7 +4,6 @@ import sys
 import os 
 from datetime import datetime 
 import argparse
-from datasets import load_from_disk
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
@@ -17,13 +16,14 @@ from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
 from Plotting.plot_chladni_utils import plot_chladni_results
+from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train SetONet for Chladni plate problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/chladni_dataset", 
+    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_dataset", 
                        help='Path to Chladni dataset')
     
     # Model architecture
@@ -38,7 +38,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
+    parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
@@ -74,73 +74,6 @@ def get_activation_function(activation_name):
         'swish': nn.SiLU  # SiLU is equivalent to Swish
     }
     return activation_map.get(activation_name.lower(), nn.ReLU)
-
-class ChladniDataset:
-    """Dataset wrapper for Chladni plate data that uses pre-normalized data."""
-    
-    def __init__(self, dataset, batch_size=64, device='cuda'):
-        print("Loading pre-normalized Chladni dataset...")
-        
-        self.batch_size = batch_size
-        self.device = device
-        train_data = dataset['train']
-        self.n_samples = len(train_data)
-        
-        # Get dimensions from first sample
-        sample_0 = train_data[0]
-        self.n_points = len(sample_0['X'])
-        self.input_dim = len(sample_0['X'][0])
-        
-        # Pre-allocate tensors on GPU for ALL data
-        self.X_data = torch.zeros(self.n_samples, self.n_points, self.input_dim, device=device, dtype=torch.float32)
-        self.u_data = torch.zeros(self.n_samples, self.n_points, device=device, dtype=torch.float32)
-        self.Y_data = torch.zeros(self.n_samples, self.n_points, self.input_dim, device=device, dtype=torch.float32)
-        self.s_data = torch.zeros(self.n_samples, self.n_points, device=device, dtype=torch.float32)
-        
-        # Load pre-normalized data to GPU
-        for i in range(self.n_samples):
-            sample = train_data[i]
-            self.X_data[i] = torch.tensor(sample['X'], device=device, dtype=torch.float32)
-            self.u_data[i] = torch.tensor(sample['u'], device=device, dtype=torch.float32)
-            self.Y_data[i] = torch.tensor(sample['Y'], device=device, dtype=torch.float32)
-            self.s_data[i] = torch.tensor(sample['s'], device=device, dtype=torch.float32)
-        
-        print(f"Dataset loaded: {self.n_samples} samples, {self.n_points} points")
-        
-        # Load normalization statistics
-        import json
-        with open('Data/chladni_normalization_stats.json', 'r') as f:
-            stats = json.load(f)
-        
-        self.u_mean = torch.tensor(stats['u_mean'], device=device, dtype=torch.float32)
-        self.u_std = torch.tensor(stats['u_std'], device=device, dtype=torch.float32)
-        self.s_mean = torch.tensor(stats['s_mean'], device=device, dtype=torch.float32)
-        self.s_std = torch.tensor(stats['s_std'], device=device, dtype=torch.float32)
-        self.xy_mean = torch.tensor(stats['xy_mean'], device=device, dtype=torch.float32)
-        self.xy_std = torch.tensor(stats['xy_std'], device=device, dtype=torch.float32)
-        
-    def sample(self, device=None):
-        """Sample a batch using pre-normalized GPU tensors."""
-        indices = torch.randint(0, self.n_samples, (self.batch_size,), device=self.device)
-        
-        xs = self.X_data[indices]
-        us = self.u_data[indices].unsqueeze(-1)
-        ys = self.Y_data[indices]
-        G_u_ys = self.s_data[indices].unsqueeze(-1)
-        
-        return xs, us, ys, G_u_ys, None
-    
-    def denormalize_displacement(self, s_norm):
-        """Denormalize displacement predictions."""
-        return s_norm * (self.s_std + 1e-8) + self.s_mean
-    
-    def denormalize_force(self, u_norm):
-        """Denormalize force values."""
-        return u_norm * (self.u_std + 1e-8) + self.u_mean
-    
-    def denormalize_coordinates(self, coords_norm):
-        """Denormalize coordinates."""
-        return coords_norm * self.xy_std + self.xy_mean
 
 def create_model(args, device):
     """Create SetONet model for Chladni problem."""
@@ -258,18 +191,15 @@ def main():
     # Setup logging
     log_dir = setup_logging(project_root)
     
-    # Load dataset
-    print(f"Loading dataset from: {args.data_path}")
-    try:
-        dataset = load_from_disk(args.data_path)
-        print(f"Dataset loaded: {len(dataset['train'])} train, {len(dataset['test'])} test samples")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        print("Run: python Data/chladni_plate_generator.py")
-        return
+    # Load dataset using the new function
+    dataset, chladni_dataset = load_chladni_dataset(
+        data_path=args.data_path,
+        batch_size=args.batch_size,
+        device=device
+    )
     
-    # Create dataset wrapper
-    chladni_dataset = ChladniDataset(dataset, batch_size=args.batch_size, device=device)
+    if dataset is None or chladni_dataset is None:
+        return
     
     # Create model
     print("Creating SetONet model...")
