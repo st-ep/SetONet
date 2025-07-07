@@ -16,14 +16,16 @@ from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
 from Data.heat_data.heat_2d_dataset import load_heat_dataset
+from Plotting.plot_heat_2d_utils import plot_heat_results
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train SetONet for 2D heat problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="Data/heat_data/pcb_heat_dataset", 
+    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/heat_data/pcb_heat_adaptive_dataset9.0_n16384", 
                        help='Path to Heat 2D dataset')
+    parser.add_argument('--adaptive_mesh', action='store_true', help='Use adaptive mesh dataset (auto-detected from data)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=128, help='Latent dimension p for SetONet')
@@ -37,12 +39,12 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=5000, help='Number of epochs for SetONet')
+    parser.add_argument('--son_epochs', type=int, default=25000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
     parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency for sinusoidal positional encoding')
-    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
+    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[15000, 30000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Model loading
@@ -118,10 +120,16 @@ def evaluate_model(model, dataset, heat_dataset, device, n_test_samples=100):
             source_coords = sources[:, :2].unsqueeze(0)  # (1, n_sources, 2)
             source_powers = sources[:, 2:3].unsqueeze(0)  # (1, n_sources, 1)
             
-            # Target data
-            target_coords = heat_dataset.grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
-            temp_field = torch.tensor(np.array(sample['field'])[:, :, 0].flatten(), device=device, dtype=torch.float32)
-            target_temps = temp_field.unsqueeze(0).unsqueeze(-1)  # (1, n_grid_points, 1)
+            # Handle adaptive vs uniform mesh
+            if heat_dataset.is_adaptive:
+                # Adaptive mesh: different grid points per sample
+                target_coords = torch.tensor(np.array(sample['grid_coords']), device=device, dtype=torch.float32).unsqueeze(0)
+                target_temps = torch.tensor(np.array(sample['field_values']), device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
+            else:
+                # Uniform mesh: same grid for all samples
+                target_coords = heat_dataset.grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+                temp_field = torch.tensor(np.array(sample['field'])[:, :, 0].flatten(), device=device, dtype=torch.float32)
+                target_temps = temp_field.unsqueeze(0).unsqueeze(-1)  # (1, n_grid_points, 1)
             
             # Forward pass
             pred = model(source_coords, source_powers, target_coords)
@@ -187,6 +195,20 @@ def main():
     # Evaluate model
     print("\nEvaluating model...")
     evaluate_model(model, dataset, heat_dataset, device, n_test_samples=100)
+    
+    # Plot results
+    print("Generating plots...")
+    # Plot 3 test samples
+    for i in range(3):
+        plot_save_path = os.path.join(log_dir, f"heat_results_test_sample_{i}.png")
+        plot_heat_results(model, dataset, heat_dataset, device, sample_idx=i, 
+                         save_path=plot_save_path, dataset_split="test")
+    
+    # Plot 3 train samples  
+    for i in range(3):
+        plot_save_path = os.path.join(log_dir, f"heat_results_train_sample_{i}.png")
+        plot_heat_results(model, dataset, heat_dataset, device, sample_idx=i, 
+                         save_path=plot_save_path, dataset_split="train")
     
     # Save model
     model_save_path = os.path.join(log_dir, "heat2d_setonet_model.pth")
