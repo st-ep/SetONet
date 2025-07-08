@@ -37,7 +37,7 @@ def generate_adaptive_grid(
     spike_focus: float,
     eps: float,
     rng: np.random.Generator,
-    min_coverage: float = 0.1,
+    initial_grid_size: int = 5,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate adaptive grid points focused on temperature spikes.
     
@@ -48,6 +48,7 @@ def generate_adaptive_grid(
         spike_focus: Focus strength on spikes (0=uniform, higher=more focused)
         eps: Softening parameter
         rng: Random number generator
+        initial_grid_size: Size of initial uniform grid (default 5x5)
         
     Returns:
         tuple of (grid_coords, field_values) where:
@@ -75,6 +76,26 @@ def generate_adaptive_grid(
         
         return grid_coords, field_values
     
+    # Step 0: Start with initial coarse grid
+    xs_initial = np.linspace(0, 1, initial_grid_size, dtype=np.float32)
+    ys_initial = xs_initial
+    X_initial, Y_initial = np.meshgrid(xs_initial, ys_initial, indexing="xy")
+    initial_grid_coords = np.column_stack([X_initial.flatten(), Y_initial.flatten()])  # (initial_grid_size^2, 2)
+    
+    # Compute field values for initial grid (VECTORIZED)
+    grid_expanded = initial_grid_coords[:, np.newaxis, :]  # (initial_grid_size^2, 1, 2)
+    src_expanded = src_xy[np.newaxis, :, :]               # (1, n_sources, 2)
+    distances = np.sqrt(np.sum((grid_expanded - src_expanded) ** 2, axis=2)) + eps
+    log_distances = np.log(distances)
+    powers_expanded = src_q[np.newaxis, :]
+    contributions = (powers_expanded / (2 * np.pi)) * log_distances
+    initial_field_values = np.sum(contributions, axis=1).astype(np.float32)  # (initial_grid_size^2,)
+    
+    # If we only need initial_grid_size^2 or fewer points, return the initial grid
+    initial_grid_points = initial_grid_size * initial_grid_size
+    if n_points <= initial_grid_points:
+        return initial_grid_coords[:n_points], initial_field_values[:n_points]
+    
     # Step 1: Create a coarse reference grid to estimate temperature distribution
     coarse_res = 128  # Higher resolution for better spike detection
     xs_coarse = np.linspace(0, 1, coarse_res, dtype=np.float32)
@@ -88,17 +109,14 @@ def generate_adaptive_grid(
     normalized_magnitude = (temp_magnitude - temp_magnitude.min()) / (temp_magnitude.max() - temp_magnitude.min() + 1e-8)
     spike_weights = np.exp(spike_focus * normalized_magnitude)
     
-    # Ensure minimum coverage by adding a constant minimum weight
-    min_weight = min_coverage * np.max(spike_weights)
-    sampling_weights = spike_weights + min_weight
+    # Normalize to probabilities (no minimum coverage needed since we have initial grid)
+    sampling_probs = spike_weights / np.sum(spike_weights)
     
-    # Normalize to probabilities
-    sampling_probs = sampling_weights / np.sum(sampling_weights)
-    
-    # Step 3: Sample grid points according to temperature-based probabilities
+    # Step 3: Sample additional adaptive grid points according to temperature-based probabilities
+    n_adaptive_points = n_points - initial_grid_points  # Remaining points after initial grid
     flat_indices = rng.choice(
         coarse_res * coarse_res, 
-        size=n_points, 
+        size=n_adaptive_points, 
         p=sampling_probs.flatten(), 
         replace=True
     )
@@ -111,36 +129,40 @@ def generate_adaptive_grid(
     grid_spacing = 1.0 / (coarse_res - 1)
     perturbation_scale = grid_spacing * 0.3  # Small perturbation within grid cell
     
-    grid_coords = np.zeros((n_points, 2), dtype=np.float32)
-    grid_coords[:, 0] = xs_coarse[col_indices] + rng.normal(0, perturbation_scale, n_points)
-    grid_coords[:, 1] = ys_coarse[row_indices] + rng.normal(0, perturbation_scale, n_points)
+    adaptive_grid_coords = np.zeros((n_adaptive_points, 2), dtype=np.float32)
+    adaptive_grid_coords[:, 0] = xs_coarse[col_indices] + rng.normal(0, perturbation_scale, n_adaptive_points)
+    adaptive_grid_coords[:, 1] = ys_coarse[row_indices] + rng.normal(0, perturbation_scale, n_adaptive_points)
     
     # Clamp to domain [0, 1]
-    grid_coords = np.clip(grid_coords, 0, 1)
+    adaptive_grid_coords = np.clip(adaptive_grid_coords, 0, 1)
     
     # Step 4: Compute exact field values at adaptive grid points (VECTORIZED)
     # Use broadcasting to compute all distances at once
-    # grid_coords shape: (n_points, 2)
+    # adaptive_grid_coords shape: (n_adaptive_points, 2)
     # src_xy shape: (n_sources, 2)
-    # We want: (n_points, n_sources) distance matrix
+    # We want: (n_adaptive_points, n_sources) distance matrix
     
-    # Expand dimensions for broadcasting: (n_points, 1, 2) - (1, n_sources, 2)
-    grid_expanded = grid_coords[:, np.newaxis, :]  # (n_points, 1, 2)
-    src_expanded = src_xy[np.newaxis, :, :]        # (1, n_sources, 2)
+    # Expand dimensions for broadcasting: (n_adaptive_points, 1, 2) - (1, n_sources, 2)
+    grid_expanded = adaptive_grid_coords[:, np.newaxis, :]  # (n_adaptive_points, 1, 2)
+    src_expanded = src_xy[np.newaxis, :, :]                 # (1, n_sources, 2)
     
-    # Compute all pairwise distances at once: (n_points, n_sources)
+    # Compute all pairwise distances at once: (n_adaptive_points, n_sources)
     distances = np.sqrt(np.sum((grid_expanded - src_expanded) ** 2, axis=2)) + eps
     
-    # Compute log distances: (n_points, n_sources)
+    # Compute log distances: (n_adaptive_points, n_sources)
     log_distances = np.log(distances)
     
-    # Apply source powers and sum: (n_points,)
-    # src_q shape: (n_sources,) -> broadcast to (n_points, n_sources)
+    # Apply source powers and sum: (n_adaptive_points,)
+    # src_q shape: (n_sources,) -> broadcast to (n_adaptive_points, n_sources)
     powers_expanded = src_q[np.newaxis, :]  # (1, n_sources)
-    contributions = (powers_expanded / (2 * np.pi)) * log_distances  # (n_points, n_sources)
-    field_values = np.sum(contributions, axis=1).astype(np.float32)  # (n_points,)
+    contributions = (powers_expanded / (2 * np.pi)) * log_distances  # (n_adaptive_points, n_sources)
+    adaptive_field_values = np.sum(contributions, axis=1).astype(np.float32)  # (n_adaptive_points,)
     
-    return grid_coords, field_values
+    # Step 5: Combine initial grid with adaptive points
+    final_grid_coords = np.concatenate([initial_grid_coords, adaptive_grid_coords], axis=0)
+    final_field_values = np.concatenate([initial_field_values, adaptive_field_values], axis=0)
+    
+    return final_grid_coords, final_field_values
 
 def make_record(
     *,
@@ -155,7 +177,7 @@ def make_record(
     adaptive_mesh: bool = False,
     spike_focus: float = 2.0,
     n_adaptive_points: int = 4096,
-    min_coverage: float = 0.1,
+    initial_grid_size: int = 5,
 ) -> dict[str, object]:
     """Create one (sources, field, T_min, T_max) record."""
     n_src = rng.integers(n_min, n_max + 1)
@@ -176,7 +198,7 @@ def make_record(
     if adaptive_mesh:
         # Generate adaptive grid focused on temperature spikes
         grid_coords, field_values = generate_adaptive_grid(
-            src_xy, src_q, n_adaptive_points, spike_focus, eps, rng, min_coverage
+            src_xy, src_q, n_adaptive_points, spike_focus, eps, rng, initial_grid_size
         )
         
         return {
@@ -228,15 +250,15 @@ def main():
     parser = argparse.ArgumentParser(description="Generate PCB‑heat dataset (steady‑state).")
     parser.add_argument("--train", type=int, default=10_000, help="# training samples")
     parser.add_argument("--test", type=int, default=1_000, help="# test samples")
-    parser.add_argument("--grid", type=int, default=64, help="Grid resolution (N×N)")
+    parser.add_argument("--grid", type=int, default=5, help="Grid resolution (N×N)")
 
     # source distribution
-    parser.add_argument("--n_min", type=int, default=10, help="Min # sources")
-    parser.add_argument("--n_max", type=int, default=10, help="Max # sources")
+    parser.add_argument("--n_min", type=int, default=30, help="Min # sources")
+    parser.add_argument("--n_max", type=int, default=30, help="Max # sources")
 
     # power distribution
     parser.add_argument("--constant_power", action="store_true", help="Set all Q_i = 1")
-    parser.add_argument("--power_low", type=float, default=1e-2, help="Lower bound of Q_i (ignored if constant)")
+    parser.add_argument("--power_low", type=float, default=1e-1, help="Lower bound of Q_i (ignored if constant)")
     parser.add_argument("--power_high", type=float, default=1.0, help="Upper bound of Q_i (ignored if constant)")
 
     parser.add_argument("--eps", type=float, default=1e-1, help="Softening radius ε in Green function")
@@ -244,9 +266,9 @@ def main():
     
     # Adaptive mesh parameters
     parser.add_argument("--adaptive_mesh", action="store_true", help="Use adaptive mesh focused on temperature spikes")
-    parser.add_argument("--spike_focus", type=float, default=9.0, help="Focus strength on spikes (0=uniform, higher=more focused)")
-    parser.add_argument("--n_adaptive_points", type=int, default=16384, help="Number of adaptive grid points")
-    parser.add_argument("--min_coverage", type=float, default=0.01, help="Minimum coverage ratio (0=pure spike focus, 1=uniform)")
+    parser.add_argument("--spike_focus", type=float, default=8.0, help="Focus strength on spikes (0=uniform, higher=more focused)")
+    parser.add_argument("--n_adaptive_points", type=int, default=8192, help="Number of adaptive grid points")
+    parser.add_argument("--initial_grid_size", type=int, default=20, help="Size of initial uniform grid (NxN)")
 
     args = parser.parse_args()
 
@@ -262,12 +284,12 @@ def main():
         adaptive_mesh=args.adaptive_mesh,
         spike_focus=args.spike_focus,
         n_adaptive_points=args.n_adaptive_points,
-        min_coverage=args.min_coverage,
+        initial_grid_size=args.initial_grid_size,
     )
 
     # Use different dataset paths for adaptive vs uniform mesh
     if args.adaptive_mesh:
-        dataset_path = f"Data/heat_data/pcb_heat_adaptive_dataset{args.spike_focus}_n{args.n_adaptive_points}"
+        dataset_path = f"Data/heat_data/pcb_heat_adaptive_dataset{args.spike_focus}_n{args.n_adaptive_points}_N{args.initial_grid_size}_P{args.n_min}"
     else:
         dataset_path = "Data/heat_data/pcb_heat_dataset"
 

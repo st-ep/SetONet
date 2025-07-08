@@ -116,8 +116,7 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
     # For contour plots with meshgrid indexing='xy': X[i,j] = x[j], Y[i,j] = y[i]
     # So field[i,j] corresponds to location (x[j], y[i])
     # We need to transpose field to match this: field.T[i,j] corresponds to (x[i], y[j])
-    im1 = ax.contourf(X, Y, pred_field, levels=20, cmap='hot', vmin=vmin, vmax=vmax)
-    ax.contour(X, Y, pred_field, levels=10, colors='black', alpha=0.3, linewidths=0.5)
+    im1 = ax.contourf(X, Y, pred_field, levels=100, cmap='hot', vmin=vmin, vmax=vmax)
     
     # Add heat sources
     if len(sources) > 0:
@@ -142,8 +141,7 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
     
     # Plot 2: Ground Truth
     ax = ax_gt
-    im2 = ax.contourf(X, Y, field_gt, levels=20, cmap='hot', vmin=vmin, vmax=vmax)
-    ax.contour(X, Y, field_gt, levels=10, colors='black', alpha=0.3, linewidths=0.5)
+    im2 = ax.contourf(X, Y, field_gt, levels=100, cmap='hot', vmin=vmin, vmax=vmax)
     
     # Add heat sources
     if len(sources) > 0:
@@ -165,8 +163,7 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
     
     # Plot 3: Absolute Error
     ax = ax_err
-    im3 = ax.contourf(X, Y, abs_error, levels=20, cmap='Reds')
-    ax.contour(X, Y, abs_error, levels=10, colors='black', alpha=0.3, linewidths=0.5)
+    im3 = ax.contourf(X, Y, abs_error, levels=100, cmap='Reds')
     
     # Add heat sources
     if len(sources) > 0:
