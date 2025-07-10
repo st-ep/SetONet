@@ -23,7 +23,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for 2D heat problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/heat_data/pcb_heat_adaptive_dataset8.0_n8192_N20_P30", 
+    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/heat_data/pcb_heat_adaptive_dataset9.0_n8192_N25_P10", 
                        help='Path to Heat 2D dataset')
     parser.add_argument('--adaptive_mesh', action='store_true', help='Use adaptive mesh dataset (auto-detected from data)')
     

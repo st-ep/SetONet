@@ -97,7 +97,7 @@ def generate_adaptive_grid(
         return initial_grid_coords[:n_points], initial_field_values[:n_points]
     
     # Step 1: Create a coarse reference grid to estimate temperature distribution
-    coarse_res = 128  # Higher resolution for better spike detection
+    coarse_res = 128  
     xs_coarse = np.linspace(0, 1, coarse_res, dtype=np.float32)
     ys_coarse = xs_coarse
     field_coarse = green_temperature(xs_coarse, ys_coarse, src_xy, src_q, eps)
@@ -105,7 +105,6 @@ def generate_adaptive_grid(
     # Step 2: Create sampling probabilities based on temperature magnitude
     # Focus on most negative values (spikes) with exponential weighting
     temp_magnitude = np.abs(field_coarse)
-    # Apply spike focus: higher values = more focus on extreme temperatures
     normalized_magnitude = (temp_magnitude - temp_magnitude.min()) / (temp_magnitude.max() - temp_magnitude.min() + 1e-8)
     spike_weights = np.exp(spike_focus * normalized_magnitude)
     
@@ -253,8 +252,8 @@ def main():
     parser.add_argument("--grid", type=int, default=5, help="Grid resolution (N×N)")
 
     # source distribution
-    parser.add_argument("--n_min", type=int, default=30, help="Min # sources")
-    parser.add_argument("--n_max", type=int, default=30, help="Max # sources")
+    parser.add_argument("--n_min", type=int, default=10, help="Min # sources")
+    parser.add_argument("--n_max", type=int, default=10, help="Max # sources")
 
     # power distribution
     parser.add_argument("--constant_power", action="store_true", help="Set all Q_i = 1")
@@ -266,9 +265,9 @@ def main():
     
     # Adaptive mesh parameters
     parser.add_argument("--adaptive_mesh", action="store_true", help="Use adaptive mesh focused on temperature spikes")
-    parser.add_argument("--spike_focus", type=float, default=8.0, help="Focus strength on spikes (0=uniform, higher=more focused)")
+    parser.add_argument("--spike_focus", type=float, default=9.0, help="Focus strength on spikes (0=uniform, higher=more focused)")
     parser.add_argument("--n_adaptive_points", type=int, default=8192, help="Number of adaptive grid points")
-    parser.add_argument("--initial_grid_size", type=int, default=20, help="Size of initial uniform grid (NxN)")
+    parser.add_argument("--initial_grid_size", type=int, default=25, help="Size of initial uniform grid (NxN)")
 
     args = parser.parse_args()
 

@@ -10,16 +10,30 @@ import matplotlib.pyplot as plt
 from datasets import load_from_disk
 from pathlib import Path
 import matplotlib.colors as colors
+from scipy.interpolate import griddata
 
-def load_heat_dataset(dataset_path: str = "Data/heat_data/pcb_heat_dataset"):
+def load_heat_dataset(dataset_path: str = "Data/heat_data/pcb_heat_adaptive_dataset9.0_n8192_N25_P10"):
     """Load the heat dataset from disk and extract parameters."""
     try:
         dataset = load_from_disk(dataset_path)
         
-        # Extract grid size from the first sample's field shape
+        # Check if this is adaptive mesh or uniform grid
         first_sample = dataset['train'][0]
-        field_shape = np.array(first_sample['field']).shape
-        grid_n = field_shape[0]  # field shape is (grid_n, grid_n, 1)
+        is_adaptive = 'grid_coords' in first_sample
+        
+        if is_adaptive:
+            # Adaptive mesh dataset
+            grid_coords = np.array(first_sample['grid_coords'])
+            field_values = np.array(first_sample['field_values'])
+            print(f"Dataset type: Adaptive mesh")
+            print(f"  - Sample grid points: {len(grid_coords)}")
+            grid_n = 64  # Default visualization grid size for adaptive mesh
+        else:
+            # Uniform grid dataset
+            field_shape = np.array(first_sample['field']).shape
+            grid_n = field_shape[0]  # field shape is (grid_n, grid_n, 1)
+            print(f"Dataset type: Uniform grid")
+            print(f"  - Grid size: {grid_n}×{grid_n}")
         
         # Analyze dataset to extract generation parameters
         train_data = dataset['train']
@@ -40,29 +54,51 @@ def load_heat_dataset(dataset_path: str = "Data/heat_data/pcb_heat_dataset"):
         power_max = max(all_powers) if all_powers else 0
         
         print(f"Dataset parameters detected:")
-        print(f"  - Grid size: {grid_n}×{grid_n}")
-        print(f"  - Field shape: {field_shape}")
         print(f"  - Source count range: {n_min} to {n_max}")
         print(f"  - Power range: {power_min:.4f} to {power_max:.4f}")
         print(f"  - Train samples: {len(dataset['train'])}")
         print(f"  - Test samples: {len(dataset['test'])}")
         
-        return dataset, grid_n
+        return dataset, grid_n, is_adaptive
     except Exception as e:
         print(f"Error loading dataset from {dataset_path}: {e}")
-        return None, None
+        return None, None, None
 
 def plot_single_sample(sample, sample_idx=0, grid_n=64, save_path=None):
     """Plot a single heat sample with temperature field and source locations."""
     
     # Extract data
     sources = np.array(sample["sources"])  # shape: (n_sources, 3) -> [x, y, power]
-    field = np.array(sample["field"]).squeeze()  # remove channel dimension (raw temperature field)
     
-    # Create coordinate grids
+    # Check if this is adaptive mesh or uniform grid
+    is_adaptive = 'grid_coords' in sample
+    
+    # Create visualization grid (always uniform for plotting)
     x = np.linspace(0, 1, grid_n)
     y = np.linspace(0, 1, grid_n)
     X, Y = np.meshgrid(x, y, indexing='xy')
+    
+    if is_adaptive:
+        # Adaptive mesh data - interpolate to regular grid for visualization
+        grid_coords = np.array(sample["grid_coords"])  # (n_points, 2) -> [x, y]
+        field_values = np.array(sample["field_values"])  # (n_points,)
+        
+        # Interpolate to regular grid for visualization
+        field = griddata(grid_coords, field_values, (X, Y), method='cubic', fill_value=np.nan)
+        field = np.nan_to_num(field, nan=0.0)  # Replace NaN with 0
+        
+        # Store adaptive points for visualization
+        adaptive_coords = grid_coords
+    else:
+        # Uniform grid data
+        field = np.array(sample["field"]).squeeze()  # remove channel dimension (raw temperature field)
+        # Update grid to match data resolution
+        actual_grid_n = field.shape[0]
+        if actual_grid_n != grid_n:
+            x = np.linspace(0, 1, actual_grid_n)
+            y = np.linspace(0, 1, actual_grid_n)
+            X, Y = np.meshgrid(x, y, indexing='xy')
+        adaptive_coords = None
     
     # Single subplot layout: [ax_main | cbar_temp | cbar_power]
     fig = plt.figure(figsize=(10, 6))
@@ -78,17 +114,11 @@ def plot_single_sample(sample, sample_idx=0, grid_n=64, save_path=None):
     cax_temp = fig.add_subplot(gs[0, 1])
     cax_power = fig.add_subplot(gs[0, 2])
     
-    im = ax_main.contourf(X, Y, field.T, levels=20, cmap="hot")
-    ax_main.contour(X, Y, field.T, levels=10, colors="black", alpha=0.3, linewidths=0.5)
+    # Plot temperature field
+    im = ax_main.contourf(X, Y, field, levels=20, cmap="hot")
+    ax_main.contour(X, Y, field, levels=10, colors="black", alpha=0.3, linewidths=0.5)
     
-    # Temperature colorbar (initial position from GridSpec)
-    fig.colorbar(im, cax=cax_temp, label="Temperature")
-    # Manually shift the temperature colorbar slightly left to hug the main plot
-    temp_pos = cax_temp.get_position()
-    shift = 0.085  # fraction of figure width to shift left
-    cax_temp.set_position([temp_pos.x0 - shift, temp_pos.y0, temp_pos.width, temp_pos.height])
-    
-    # Add source power colorbar (right)
+    # Add heat sources
     if len(sources) > 0:
         scatter = ax_main.scatter(
             sources[:, 0],
@@ -100,6 +130,25 @@ def plot_single_sample(sample, sample_idx=0, grid_n=64, save_path=None):
             linewidth=2,
             label="Heat Sources",
         )
+    
+    # Add adaptive points visualization for adaptive mesh (subsample for visibility)
+    if is_adaptive and adaptive_coords is not None:
+        n_show = min(1000, len(adaptive_coords))  # Show at most 1000 points
+        indices = np.random.choice(len(adaptive_coords), n_show, replace=False)
+        ax_main.scatter(adaptive_coords[indices, 0], adaptive_coords[indices, 1], 
+                       c='cyan', s=0.5, alpha=0.4, 
+                       label=f'Adaptive points ({n_show}/{len(adaptive_coords)})')
+        ax_main.legend(loc='upper right', fontsize=8)
+    
+    # Temperature colorbar (initial position from GridSpec)
+    fig.colorbar(im, cax=cax_temp, label="Temperature")
+    # Manually shift the temperature colorbar slightly left to hug the main plot
+    temp_pos = cax_temp.get_position()
+    shift = 0.085  # fraction of figure width to shift left
+    cax_temp.set_position([temp_pos.x0 - shift, temp_pos.y0, temp_pos.width, temp_pos.height])
+    
+    # Add source power colorbar (right)
+    if len(sources) > 0:
         fig.colorbar(scatter, cax=cax_power, label="Source Power")
     else:
         # If no sources, hide the power colorbar axis
@@ -110,139 +159,17 @@ def plot_single_sample(sample, sample_idx=0, grid_n=64, save_path=None):
     ax_main.grid(True, alpha=0.3)
     ax_main.set_aspect("equal", adjustable="box")
     
-    # ------------------------------------------------------------------
-    # Finalise
-    # ------------------------------------------------------------------
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Saved plot to {save_path}")
     
     return fig
 
-def plot_multiple_samples(dataset, n_samples=6, split='train', grid_n=64, save_path=None):
-    """Plot multiple samples in a grid layout."""
-    
-    data = dataset[split]
-    n_samples = min(n_samples, len(data))
-    
-    # Calculate grid layout
-    cols = 3
-    rows = (n_samples + cols - 1) // cols
-    
-    fig, axes = plt.subplots(rows, cols, figsize=(15, 5*rows))
-    if rows == 1:
-        axes = axes.reshape(1, -1)
-    
-    # Create coordinate grids
-    x = np.linspace(0, 1, grid_n)
-    y = np.linspace(0, 1, grid_n)
-    X, Y = np.meshgrid(x, y, indexing='xy')
-    
-    for i in range(n_samples):
-        row = i // cols
-        col = i % cols
-        ax = axes[row, col]
-        
-        sample = data[i]
-        sources = np.array(sample["sources"])
-        field = np.array(sample["field"]).squeeze()
-        
-        # Plot temperature field
-        im = ax.contourf(X, Y, field.T, levels=15, cmap='hot')
-        ax.contour(X, Y, field.T, levels=8, colors='black', alpha=0.3, linewidths=0.5)
-        
-        # Plot heat sources
-        if len(sources) > 0:
-            ax.scatter(sources[:, 0], sources[:, 1], 
-                      c=sources[:, 2], s=50, 
-                      cmap='viridis', edgecolors='white', linewidth=1)
-        
-        ax.set_title(f'Sample #{i+1} ({len(sources)} sources)')
-        ax.set_xlabel('X position')
-        ax.set_ylabel('Y position')
-        ax.grid(True, alpha=0.3)
-    
-    # Hide empty subplots
-    for i in range(n_samples, rows * cols):
-        row = i // cols
-        col = i % cols
-        axes[row, col].set_visible(False)
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
-    
-    return fig
 
-def plot_dataset_statistics(dataset, save_path=None):
-    """Plot statistics about the dataset."""
-    
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('PCB Heat Dataset Statistics', fontsize=16, fontweight='bold')
-    
-    for split_idx, split in enumerate(['train', 'test']):
-        data = dataset[split]
-        
-        # Collect statistics
-        n_sources_list = []
-        power_ranges = []
-        temp_ranges = []
-        all_powers = []
-        
-        for sample in data:
-            sources = np.array(sample["sources"])
-            n_sources_list.append(len(sources))
-            
-            if len(sources) > 0:
-                powers = sources[:, 2]
-                all_powers.extend(powers.tolist())
-                power_ranges.append([powers.min(), powers.max()])
-            
-            # Get temperature range from the field itself
-            field = np.array(sample["field"]).squeeze()
-            temp_ranges.append([field.min(), field.max()])
-        
-        # Plot 1: Number of sources distribution
-        ax = axes[split_idx, 0]
-        ax.hist(n_sources_list, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
-        ax.set_xlabel('Number of Heat Sources')
-        ax.set_ylabel('Frequency')
-        ax.set_title(f'{split.capitalize()} Set: Source Count Distribution')
-        ax.grid(True, alpha=0.3)
-        
-        # Plot 2: Power distribution
-        ax = axes[split_idx, 1]
-        if all_powers:
-            ax.hist(all_powers, bins=30, alpha=0.7, color='orange', edgecolor='black')
-            ax.set_xlabel('Source Power')
-            ax.set_ylabel('Frequency')
-            ax.set_title(f'{split.capitalize()} Set: Power Distribution')
-            ax.set_yscale('log')
-            ax.grid(True, alpha=0.3)
-        
-        # Plot 3: Temperature range distribution
-        ax = axes[split_idx, 2]
-        temp_ranges = np.array(temp_ranges)
-        temp_spans = temp_ranges[:, 1] - temp_ranges[:, 0]
-        ax.hist(temp_spans, bins=25, alpha=0.7, color='red', edgecolor='black')
-        ax.set_xlabel('Temperature Range (T_max - T_min)')
-        ax.set_ylabel('Frequency')
-        ax.set_title(f'{split.capitalize()} Set: Temperature Range Distribution')
-        ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Saved statistics plot to {save_path}")
-    
-    return fig
 
 def main():
     # Hardcoded settings
-    dataset_path = "Data/heat_data/pcb_heat_dataset"
+    dataset_path = "Data/heat_data/pcb_heat_adaptive_dataset9.0_n8192_N25_P10"
     output_dir = Path("Data/heat_data/plots")
     
     # Create output directory
@@ -250,7 +177,7 @@ def main():
     
     # Load dataset and auto-detect parameters
     print(f"Loading dataset from {dataset_path}...")
-    dataset, grid_n = load_heat_dataset(dataset_path)
+    dataset, grid_n, is_adaptive = load_heat_dataset(dataset_path)
     
     if dataset is None or grid_n is None:
         print("Failed to load dataset. Exiting.")
