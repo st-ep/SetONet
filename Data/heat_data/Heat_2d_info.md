@@ -151,15 +151,6 @@ The adaptive grid generation follows these steps:
 5. **Perturbation**: Add small random perturbations for diversity
 6. **Field Computation**: Compute exact temperature values at all grid points using vectorized operations
 
-## Applications
-
-This dataset is designed for:
-
-- **Neural Operator Learning**: Training models like DeepONet, FNO, or Transformer-based operators
-- **Physics-Informed Neural Networks**: Benchmarking PINN performance on heat transfer problems
-- **Mesh-Free Methods**: Evaluating methods that work with irregular point distributions
-- **Multi-Scale Learning**: Testing models on problems with sharp temperature gradients
-
 ## Key Features
 
 - **Analytical Ground Truth**: Exact solutions without numerical discretization errors
@@ -168,13 +159,6 @@ This dataset is designed for:
 - **Efficient Implementation**: Vectorized computations for fast dataset generation
 - **Flexible Format**: Support for both regular and irregular grid structures
 - **Reproducible**: Deterministic generation with configurable random seeds
-
-## Performance Characteristics
-
-- **Generation Speed**: ~1000 samples/second on modern hardware
-- **Memory Efficiency**: Stream-based generation to handle large datasets
-- **Numerical Stability**: Softening parameter prevents singularities near sources
-- **Batch Processing**: Efficient PyTorch data loading with padding for variable-length sequences
 
 ## Visualization
 
