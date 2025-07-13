@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 """
 Generate Dynamic Chladni Plate Dataset (Point Cloud Version)
-- Generate forces with fixed magnitudes but dynamic locations.
+- Generate forces with dynamic locations and magnitudes.
 - Each sample has multiple force points: [x, y, F] where F is force magnitude.
-- Compute displacement field at uniform grid points.
+- Compute displacement field using modal superposition for thin plate vibration.
 - Split into training and testing samples.
 - Save in point cloud format similar to heat dataset.
+
+Physics: Solves the forced vibration problem for a thin plate using modal expansion.
+The displacement field is expressed as a sum of normal modes, each excited by
+the applied point forces through modal projection.
 """
 
 import numpy as np
@@ -14,79 +18,117 @@ from datasets import Dataset, Features, Sequence, Value, Array3D
 from tqdm import tqdm
 import argparse
 
-def chladni_green_function(
-    target_coords: np.ndarray,
-    force_coords: np.ndarray,
-    force_magnitudes: np.ndarray,
+def precompute_chladni_modal_params(
     L: float, M: float, omega: float, t_fixed: float, 
-    gamma: float, v: float, n_max: int = 6, m_max: int = 6,
-    eps: float = 1e-3
-) -> np.ndarray:
+    gamma: float, v: float, n_max: int = 6, m_max: int = 6
+) -> dict:
     """
-    Compute displacement field at target coordinates due to point forces.
-    
-    Uses modal expansion similar to original Chladni generator but with point forces
-    instead of distributed modal coefficients.
-    
-    Args:
-        target_coords: (N_target, 2) coordinates where displacement is computed
-        force_coords: (N_forces, 2) coordinates where forces are applied
-        force_magnitudes: (N_forces,) magnitude of each force
-        L, M: plate dimensions
-        omega: driving frequency
-        t_fixed: time at which solution is evaluated
-        gamma, v: damping parameters
-        n_max, m_max: maximum mode numbers
-        eps: regularization parameter
-        
-    Returns:
-        displacement: (N_target,) displacement values at target coordinates
+    Precompute modal parameters for Chladni plate vibration analysis.
     """
+    print("Precomputing modal parameters...")
     
-    # Precompute modal parameters
+    # Modal parameters
     n_vals = np.arange(1, n_max + 1)
     m_vals = np.arange(1, m_max + 1)
     
     mu_vals = n_vals * np.pi / L  # shape: (n_max,)
     lam_vals = m_vals * np.pi / M  # shape: (m_max,)
     
-    # Compute time integrals and mode factors for each (n,m) mode
-    displacement = np.zeros(len(target_coords), dtype=np.float32)
+    # Precompute center factors
+    centerFactor = np.cos(mu_vals[:, None] * (L/2)) * np.cos(lam_vals[None, :] * (M/2))
     
-    for n_idx, n in enumerate(n_vals):
-        for m_idx, m in enumerate(m_vals):
-            mu_n = mu_vals[n_idx]
-            lam_m = lam_vals[m_idx]
+    # Precompute beta values
+    mu_squared = mu_vals[:, None]**2  # shape: (n_max, 1)
+    lam_squared = lam_vals[None, :]**2  # shape: (1, m_max)
+    beta_nm = np.sqrt(mu_squared + lam_squared + 3*v**2 - gamma**4)
+    
+    # Precompute time integrals (this is the expensive part)
+    timeInt = np.zeros((n_max, m_max))
+    
+    for n in range(n_max):
+        for m in range(m_max):
+            current_beta = beta_nm[n, m]
             
-            # Modal frequency
-            beta_nm = np.sqrt(mu_n**2 + lam_m**2 + 3*v**2 - gamma**4)
-            
-            # Time integral (same as original)
             def integrand(tau):
                 return (np.sin(omega * (tau - t_fixed)) * 
                        np.exp(-gamma**2 + v**2 * tau) * 
-                       np.sin(beta_nm * tau))
+                       np.sin(current_beta * tau))
             
-            time_integral, _ = quad(integrand, 0, t_fixed)
-            
-            # Mode factor
-            mode_factor = (v**2 / beta_nm) * time_integral * (4/(L*M))
+            timeInt[n, m], _ = quad(integrand, 0, t_fixed)
+    
+    # Precompute mode factors
+    modeFactor = (v**2 / beta_nm) * timeInt * (4/(L*M)) * centerFactor
+    
+    return {
+        'mu_vals': mu_vals,
+        'lam_vals': lam_vals,
+        'modeFactor': modeFactor,
+        'n_max': n_max,
+        'm_max': m_max,
+        'L': L,
+        'M': M
+    }
+
+def compute_chladni_displacement_field(
+    target_coords: np.ndarray,
+    force_coords: np.ndarray,
+    force_magnitudes: np.ndarray,
+    modal_params: dict
+) -> np.ndarray:
+    """
+    Compute displacement field at target coordinates due to point forces.
+    
+    Args:
+        target_coords: (N_target, 2) coordinates where displacement is computed
+        force_coords: (N_forces, 2) coordinates where forces are applied  
+        force_magnitudes: (N_forces,) magnitude of each force
+        modal_params: precomputed modal parameters from precompute_chladni_modal_params
+        
+    Returns:
+        displacement: (N_target,) displacement values at target coordinates
+    """
+    mu_vals = modal_params['mu_vals']
+    lam_vals = modal_params['lam_vals']
+    modeFactor = modal_params['modeFactor']
+    n_max = modal_params['n_max']
+    m_max = modal_params['m_max']
+    L = modal_params['L']
+    M = modal_params['M']
+    
+    # Vectorized computation of mode shapes at all target points
+    # target_coords: (N_target, 2)
+    target_x = target_coords[:, 0]  # (N_target,)
+    target_y = target_coords[:, 1]  # (N_target,)
+    
+    # Compute cos(mu_n * target_x) for all n and all target points
+    # Shape: (n_max, N_target)
+    cos_mu_x = np.cos(mu_vals[:, None] * target_x[None, :])
+    
+    # Compute cos(lam_m * target_y) for all m and all target points
+    # Shape: (m_max, N_target)
+    cos_lam_y = np.cos(lam_vals[:, None] * target_y[None, :])
+    
+    # Initialize displacement
+    displacement = np.zeros(len(target_coords), dtype=np.float32)
+    
+    # Loop over modes (much faster now since time integrals are precomputed)
+    for n in range(n_max):
+        for m in range(m_max):
+            mu_n = mu_vals[n]
+            lam_m = lam_vals[m]
             
             # Compute modal contribution from all forces
             modal_amplitude = 0.0
             
             for force_x, force_y, force_mag in zip(force_coords[:, 0], force_coords[:, 1], force_magnitudes):
-                # Force contribution to this mode (assuming point force representation)
-                # This replaces the modal coefficient alpha(n,m) with actual force projection
+                # Force contribution to this mode
                 force_projection = (force_mag * 
-                                  np.cos(mu_n * force_x) * np.cos(lam_m * force_y) *
-                                  np.cos(mu_n * (L/2)) * np.cos(lam_m * (M/2)))
+                                  np.cos(mu_n * force_x) * np.cos(lam_m * force_y))
                 modal_amplitude += force_projection
             
-            # Add this mode's contribution to displacement at all target points
-            for i, (target_x, target_y) in enumerate(target_coords):
-                mode_shape = np.cos(mu_n * target_x) * np.cos(lam_m * target_y)
-                displacement[i] += modal_amplitude * mode_factor * mode_shape
+            # Add this mode's contribution to displacement at all target points (vectorized)
+            mode_shape = cos_mu_x[n, :] * cos_lam_y[m, :]  # (N_target,)
+            displacement += modal_amplitude * modeFactor[n, m] * mode_shape
     
     return displacement
 
@@ -94,22 +136,14 @@ def make_record(
     *,
     rng: np.random.Generator,
     grid_n: int,
-    n_forces_min: int,
-    n_forces_max: int,
-    force_magnitude_min: float,
-    force_magnitude_max: float,
-    L: float, M: float, omega: float, t_fixed: float,
-    gamma: float, v: float,
-    constant_force: bool = False,
-    n_max: int = 6, m_max: int = 6
+    n_forces: int,
+    force_min: float,
+    force_max: float,
+    L: float, M: float,
+    modal_params: dict,
+    constant_force: bool = False
 ) -> dict[str, object]:
     """Create one record with dynamic force locations and uniform grid output."""
-    
-    # Generate fixed number of forces (or random if min != max)
-    if n_forces_min == n_forces_max:
-        n_forces = n_forces_min
-    else:
-        n_forces = rng.integers(n_forces_min, n_forces_max + 1)
     
     # Generate force locations in normalized coordinates [0, 1]^2
     force_coords_norm = rng.random(size=(n_forces, 2), dtype=np.float32)
@@ -123,9 +157,9 @@ def make_record(
     if constant_force:
         force_magnitudes = np.ones(n_forces, dtype=np.float32)
     else:
-        # Log-uniform distribution
-        log_low = np.log10(force_magnitude_min)
-        log_high = np.log10(force_magnitude_max)
+        # Log-uniform distribution from force_min to force_max
+        log_low = np.log10(force_min)
+        log_high = np.log10(force_max)
         force_magnitudes = 10 ** rng.uniform(log_low, log_high, size=n_forces).astype(np.float32)
     
     # Create forces array: [x_norm, y_norm, force_magnitude]
@@ -142,10 +176,9 @@ def make_record(
     target_X, target_Y = np.meshgrid(target_x, target_y, indexing='ij')
     target_coords = np.column_stack([target_X.flatten(), target_Y.flatten()])
     
-    # Compute displacement field using Green's function approach
-    displacement_field = chladni_green_function(
-        target_coords, force_coords, force_magnitudes,
-        L, M, omega, t_fixed, gamma, v, n_max, m_max
+    # Compute displacement field using modal superposition
+    displacement_field = compute_chladni_displacement_field(
+        target_coords, force_coords, force_magnitudes, modal_params
     )
     
     # Reshape displacement to grid format and add channel dimension
@@ -159,10 +192,19 @@ def make_record(
 def build_dataset(num_samples: int, **kwargs) -> Dataset:
     """Stream-based builder to keep memory usage low."""
     
+    # Precompute modal parameters once for all samples
+    modal_params = precompute_chladni_modal_params(
+        L=kwargs['L'], M=kwargs['M'], omega=kwargs['omega'], t_fixed=kwargs['t_fixed'],
+        gamma=kwargs['gamma'], v=kwargs['v'], n_max=kwargs['n_max'], m_max=kwargs['m_max']
+    )
+    
     def _gen():
         rng = np.random.default_rng(kwargs.pop("seed", None))
         for _ in tqdm(range(num_samples), desc="samples"):
-            yield make_record(rng=rng, **kwargs)
+            # Pass modal_params to make_record
+            record_kwargs = {k: v for k, v in kwargs.items() if k not in ['omega', 't_fixed', 'gamma', 'v', 'n_max', 'm_max']}
+            record_kwargs['modal_params'] = modal_params
+            yield make_record(rng=rng, **record_kwargs)
     
     # Define features
     features = Features(
@@ -180,11 +222,10 @@ def main():
     parser.add_argument("--grid", type=int, default=64, help="Grid resolution (N×N)")
     
     # Force distribution
-    parser.add_argument("--n_forces_min", type=int, default=5, help="Min # forces")
-    parser.add_argument("--n_forces_max", type=int, default=15, help="Max # forces")
+    parser.add_argument("--n_forces", type=int, default=10, help="Number of forces (constant)")
     parser.add_argument("--constant_force", action="store_true", help="Set all force magnitudes = 1")
     parser.add_argument("--force_min", type=float, default=0.01, help="Min force magnitude")
-    parser.add_argument("--force_max", type=float, default=0.1, help="Max force magnitude")
+    parser.add_argument("--force_max", type=float, default=0.05, help="Max force magnitude")
     
     # Physical parameters
     parser.add_argument("--L", type=float, default=8.75 * 0.0254, help="Plate length (m)")
@@ -208,10 +249,9 @@ def main():
     
     params = dict(
         grid_n=args.grid,
-        n_forces_min=args.n_forces_min,
-        n_forces_max=args.n_forces_max,
-        force_magnitude_min=args.force_min,
-        force_magnitude_max=args.force_max,
+        n_forces=args.n_forces,
+        force_min=args.force_min,
+        force_max=args.force_max,
         constant_force=args.constant_force,
         L=args.L,
         M=args.M,
@@ -230,8 +270,11 @@ def main():
     total_samples = args.train + args.test
     
     print(f"[•] Generating {total_samples} samples with dynamic force locations...")
-    print(f"    - Forces per sample: {args.n_forces_min} to {args.n_forces_max}")
-    print(f"    - Force magnitude range: {args.force_min} to {args.force_max}")
+    print(f"    - Forces per sample: {args.n_forces} (constant)")
+    if args.constant_force:
+        print(f"    - Force magnitude: 1.0 (constant)")
+    else:
+        print(f"    - Force magnitude range: {args.force_min} to {args.force_max}")
     print(f"    - Grid resolution: {args.grid}×{args.grid}")
     print(f"    - Physical dimensions: {args.L:.4f}m × {args.M:.4f}m")
     print(f"    - Frequency: {args.omega:.2f} rad/s")

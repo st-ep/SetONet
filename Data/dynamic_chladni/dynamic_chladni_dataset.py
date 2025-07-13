@@ -61,7 +61,10 @@ class DynamicChladniDataset:
                 all_force_mags.extend(sources[:, 2].cpu().numpy().tolist())
         
         print(f"Force statistics:")
-        print(f"  - Force count range: {min(all_force_counts)} to {max(all_force_counts)}")
+        if len(set(all_force_counts)) == 1:
+            print(f"  - Force count: {all_force_counts[0]} (constant)")
+        else:
+            print(f"  - Force count range: {min(all_force_counts)} to {max(all_force_counts)}")
         if all_force_mags:
             print(f"  - Force magnitude range: {min(all_force_mags):.4f} to {max(all_force_mags):.4f}")
     
