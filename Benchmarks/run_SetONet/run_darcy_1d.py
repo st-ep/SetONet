@@ -26,7 +26,7 @@ def parse_arguments():
     # Data parameters
     parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/darcy_1d_data/darcy_1d_dataset_501", 
                        help='Path to Darcy 1D dataset')
-    parser.add_argument('--sensor_size', type=int, default=100, help='Number of sensor locations (max 501 for Darcy 1D grid)')
+    parser.add_argument('--sensor_size', type=int, default=301, help='Number of sensor locations (max 501 for Darcy 1D grid)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
@@ -40,31 +40,32 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
+    parser.add_argument('--son_epochs', type=int, default=50, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='skip', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
+    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
+    parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 50000, 100000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
-    
-    # Data generation
-    parser.add_argument('--variable_sensors', action='store_true', help='Use different random sensor locations for each sample (more challenging)')
     
     # Evaluation robustness testing (sensor failures)
     parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
     parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
     
     # Evaluation parameters
     parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples for evaluation (max 1000for Darcy 1D test set)')
-    parser.add_argument('--n_query_points', type=int, default=501, help='Number of query points for evaluation (max 501 for Darcy 1D grid)')
+    parser.add_argument('--n_query_points', type=int, default=301, help='Number of query points for evaluation (max 501 for Darcy 1D grid)')
     
     # Model loading
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
     
+    # Random seed
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    
     return parser.parse_args()
 
-def setup_logging(project_root):
+def setup_logging():
     """Setup logging directory."""
-    logs_base_in_project = os.path.join(project_root, "logs")
+    logs_base_in_project = os.path.join("/home/titanv/Stepan/setprojects/SetONet", "logs")
     model_folder_name = "SetONet_darcy_1d"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
@@ -75,11 +76,8 @@ def setup_logging(project_root):
 def train_darcy_model(setonet_model, args, data_generator, sensor_x, query_x, device, log_dir):
     """Train SetONet model on Darcy data with OPTIMIZED data loading."""
     params = data_generator.params
-    sensor_mode = "VARIABLE (continuous)" if params['variable_sensors'] else "FIXED"
     print(f"\n--- Training Darcy 1D Model ---")
-    print(f"Training with {len(sensor_x)} {sensor_mode} sensor locations and {len(query_x)} query points")
-    if params['variable_sensors']:
-        print("🔄 Sensor locations will be sampled from continuous domain [0,1] with interpolation (more challenging training)")
+    print(f"Training with {len(sensor_x)} FIXED sensor locations and {len(query_x)} query points")
     print(f"⚡ EFFICIENCY: Pre-loaded GPU data for faster training, {args.son_epochs} epochs, batch_size={args.batch_size}")
     
     # Initialize TensorBoard writer if log_dir is provided
@@ -102,23 +100,14 @@ def train_darcy_model(setonet_model, args, data_generator, sensor_x, query_x, de
     for epoch in epoch_pbar:
         setonet_model.train()
         
-        # Generate batch - handle both fixed and variable sensors
+        # Generate batch with fixed sensors (may include sensor dropout)
         batch_data = data_generator.generate_batch(args.batch_size)
-        
-        if params['variable_sensors']:
-            # Variable sensors: unpack sensor locations along with data
-            u_at_sensors, s_at_queries, current_sensor_x = batch_data
-            # Use the current batch's sensor locations
-            batch_sensor_x = current_sensor_x
-        else:
-            # Fixed sensors: use the same sensor locations
-            u_at_sensors, s_at_queries = batch_data
-            batch_sensor_x = sensor_x
+        u_at_sensors, s_at_queries, batch_sensor_x = batch_data
         
         # Prepare inputs for SetONet
         batch_size = u_at_sensors.shape[0]
         
-        # Expand sensor and query locations for batch
+        # Expand sensor and query locations for batch (use batch_sensor_x which may have dropout applied)
         xs = batch_sensor_x.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, n_sensors, 1]
         ys = query_x.unsqueeze(0).expand(batch_size, -1, -1)   # [batch_size, n_queries, 1]
         us = u_at_sensors.unsqueeze(-1)  # [batch_size, n_sensors, 1]
@@ -178,11 +167,7 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
     batch_size = params['batch_size_train']
     
     print(f"\n--- Evaluating Darcy 1D Model ---")
-    if params['variable_sensors']:
-        print(f"Evaluation using VARIABLE sensor locations (same as training)")
-        print("Note: Each evaluation batch will use different random sensor locations, testing model robustness")
-    else:
-        print(f"Evaluation using SAME {len(sensor_x)} sensor locations and {len(query_x)} query points as training")
+    print(f"Evaluation using SAME {len(sensor_x)} sensor locations and {len(query_x)} query points as training")
     
     # Print sensor dropout configuration
     if params.get('eval_sensor_dropoff', 0.0) > 0:
@@ -208,14 +193,9 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
     query_indices_gpu = query_indices.to(device)
     test_s_queries = test_s_data[:, query_indices_gpu]   # [n_test, n_queries]
     
-    # For sensor data: handle fixed vs variable sensors
-    if not params['variable_sensors']:
-        # Fixed sensors: pre-extract sensor data
-        sensor_indices_gpu = sensor_indices.to(device)
-        test_u_sensors = test_u_data[:, sensor_indices_gpu]  # [n_test, n_sensors]
-    else:
-        # Variable sensors: will generate sensor locations per batch
-        test_u_sensors = None  # Will be computed per batch
+    # Fixed sensors: pre-extract sensor data
+    sensor_indices_gpu = sensor_indices.to(device)
+    test_u_sensors = test_u_data[:, sensor_indices_gpu]  # [n_test, n_sensors]
     
     total_l2_error = 0.0
     n_batches = (n_test_samples + batch_size - 1) // batch_size
@@ -231,35 +211,9 @@ def evaluate_darcy_model(setonet_model, dataset, sensor_x, query_x, sensor_indic
             # Get query data (always the same)
             s_at_queries = test_s_queries[start_idx:end_idx]  # [current_batch_size, n_queries]
             
-            # Handle sensor data: fixed vs variable
-            if not params['variable_sensors']:
-                # Fixed sensors: use pre-extracted sensor data
-                u_at_sensors = test_u_sensors[start_idx:end_idx]  # [current_batch_size, n_sensors]
-                sensor_x_used = sensor_x
-            else:
-                # Variable sensors: generate new random sensor locations for this batch
-                from Data.data_utils import sample_variable_sensor_points
-                
-                # Generate random sensor locations from continuous domain [0,1] (same as training)
-                current_sensor_x = sample_variable_sensor_points(
-                    params['sensor_size'], 
-                    [0, 1],  # Darcy domain
-                    device
-                ).squeeze(-1)  # [n_sensors] for interpolation
-                
-                # Get the test data for this batch
-                u_batch = test_u_data[start_idx:end_idx]  # [current_batch_size, n_grid]
-                
-                # Interpolate sensor values at these arbitrary continuous locations
-                u_at_sensors = interpolate_sensor_values(
-                    u_batch, 
-                    grid_points.to(device), 
-                    current_sensor_x, 
-                    device
-                )  # [current_batch_size, n_sensors]
-                
-                # Convert sensor locations for model input
-                sensor_x_used = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
+            # Fixed sensors: use pre-extracted sensor data
+            u_at_sensors = test_u_sensors[start_idx:end_idx]  # [current_batch_size, n_sensors]
+            sensor_x_used = sensor_x
             
             u_at_sensors_used = u_at_sensors
             
@@ -342,8 +296,9 @@ def generate_darcy_plots(setonet_model, dataset, sensor_x, query_x, sensor_indic
         replace_with_nearest=params.get('replace_with_nearest', False),
         dataset_split="test",
         batch_size=params['batch_size_train'],  # Pass batch size for diverse sample selection
-        variable_sensors=params['variable_sensors'],  # Pass variable sensor flag
-        grid_points=grid_points  # Pass grid points for interpolation
+        variable_sensors=False,  # Always use fixed sensors
+        grid_points=grid_points,  # Pass grid points for interpolation
+        sensors_to_plot_fraction=0.05 
     )
     
     # Plot train data (fitting performance)
@@ -358,12 +313,13 @@ def generate_darcy_plots(setonet_model, dataset, sensor_x, query_x, sensor_indic
         log_dir=log_dir,
         num_samples_to_plot=3,
         plot_filename_prefix="darcy_1d",
-        sensor_dropoff=params.get('eval_sensor_dropoff', 0.0),
+        sensor_dropoff=params.get('train_sensor_dropoff', 0.0),  # Use train dropout, not eval dropout
         replace_with_nearest=params.get('replace_with_nearest', False),
         dataset_split="train",
         batch_size=params['batch_size_train'],  # Pass batch size for diverse sample selection
-        variable_sensors=params['variable_sensors'],  # Pass variable sensor flag
-        grid_points=grid_points  # Pass grid points for interpolation
+        variable_sensors=False,  # Always use fixed sensors
+        grid_points=grid_points,  # Pass grid points for interpolation
+        sensors_to_plot_fraction=0.05  
     )
 
 def save_model(setonet_model, log_dir, model_was_loaded):
@@ -394,6 +350,14 @@ def main():
         raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
     
     print(f"Training SetONet for Darcy 1D equation")
+
+    if not 0.0 <= args.train_sensor_dropoff <= 1.0:
+        raise ValueError("--train_sensor_dropoff must be between 0.0 and 1.0")
+
+    if args.train_sensor_dropoff > 0.0:
+        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
+        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} ({replacement_mode})")
+        print("(This makes the model more robust to sensor failures)")
     
     # Load dataset
     dataset = load_darcy_dataset(args.data_path)
@@ -410,21 +374,19 @@ def main():
     if args.n_query_points > n_grid_points:
         raise ValueError(f"n_query_points ({args.n_query_points}) cannot exceed grid points ({n_grid_points})")
     
-    log_dir = setup_logging(project_root)
+    log_dir = setup_logging()
     params = setup_parameters(args)
     
     # Fix random seed for reproducibility
-    torch.manual_seed(0)
-    np.random.seed(0)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    print(f"Using random seed: {args.seed}")
     
     # Create sensor and query points (SAME for both training and testing)
     sensor_x, sensor_indices = create_sensor_points(params, device, grid_points)
     query_x, query_indices = create_query_points(params, device, grid_points, args.n_query_points)
     
-    if params['variable_sensors']:
-        print(f"Sensor points: {len(sensor_x)} (CONTINUOUS VARIABLE during both training and evaluation)")
-    else:
-        print(f"Sensor points: {len(sensor_x)} (FIXED for both training & evaluation)")
+    print(f"Sensor points: {len(sensor_x)} (FIXED for both training & evaluation)")
     print(f"Query points: {len(query_x)} (FIXED for both training & evaluation)")
     print(f"Sensor indices: {sensor_indices[:5]}... to {sensor_indices[-5:]}")
     print(f"Query indices: {query_indices[:5]}... to {query_indices[-5:]}")

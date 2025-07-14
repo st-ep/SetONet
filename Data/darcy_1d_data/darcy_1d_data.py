@@ -5,6 +5,7 @@ from functools import partial
 from datasets import Dataset
 import tqdm
 import os
+import multiprocessing
 
 
 class Darcy1DSolver:
@@ -30,7 +31,7 @@ class Darcy1DSolver:
         )
         return prior
     
-    def generate_source_term(self):
+    def generate_source_term(self, n_samples=1):
         """Generate random source term from GP prior"""
         sigma = 0.08
         gamma = 1 / (2 * sigma**2)
@@ -38,9 +39,8 @@ class Darcy1DSolver:
         random_function = self.sample_gp_prior(
             kernel=partial(rbf_kernel, gamma=gamma),
             X=self.x,
-            n_samples=1,
-        ).flatten()
-        
+            n_samples=n_samples,
+        )
         return random_function
     
     def residual(self, s, u):
@@ -49,25 +49,25 @@ class Darcy1DSolver:
         -d/dx(k(s) * ds/dx) = u
         with boundary conditions s[0] = s[-1] = 0
         """
-        residual = np.zeros_like(s)
+        res = np.zeros_like(s)
         
-        # Interior points (finite difference discretization)
-        for i in range(1, len(s) - 1):
-            # k(s) at cell interfaces (harmonic mean for better stability)
-            k_left = self.permeability(0.5 * (s[i-1] + s[i]))
-            k_right = self.permeability(0.5 * (s[i] + s[i+1]))
-            
-            # Second-order finite difference
-            flux_left = k_left * (s[i] - s[i-1]) / self.dx
-            flux_right = k_right * (s[i+1] - s[i]) / self.dx
-            
-            residual[i] = -(flux_right - flux_left) / self.dx - u[i]
+        interior = slice(1, -1)
+        s_left = s[:-2]
+        s_mid = s[1:-1]
+        s_right = s[2:]
         
-        # Boundary conditions: s[0] = s[-1] = 0
-        residual[0] = s[0]
-        residual[-1] = s[-1]
+        k_left = self.permeability(0.5 * (s_left + s_mid))
+        k_right = self.permeability(0.5 * (s_mid + s_right))
         
-        return residual
+        flux_left = k_left * (s_mid - s_left) / self.dx
+        flux_right = k_right * (s_right - s_mid) / self.dx
+        
+        res[interior] = -(flux_right - flux_left) / self.dx - u[interior]
+        
+        res[0] = s[0]
+        res[-1] = s[-1]
+        
+        return res
     
     def solve_darcy(self, u):
         """Solve the nonlinear Darcy equation using Newton's method"""
@@ -109,27 +109,27 @@ if __name__ == "__main__":
     os.makedirs(save_dir, exist_ok=True)  # Create directory if it doesn't exist
     
     solver = Darcy1DSolver(nx=500)  # Changed from nx=100 to nx=300 for 301 grid points
-    gen = iter(solver)
-    
-    def sample_generator(ds_size):
-        for _ in range(ds_size):
-            result = next(gen)
-            yield result
     
     nx = len(solver.x)
-    data = {
-        "X": np.zeros((ds_size, nx), dtype=np.float32),
-        "u": np.zeros((ds_size, nx), dtype=np.float32),
-        "Y": np.zeros((ds_size, nx), dtype=np.float32),
-        "s": np.zeros((ds_size, nx), dtype=np.float32),
-    }
     
     print("Generating dataset...")
-    for i, d in enumerate(tqdm.tqdm(sample_generator(ds_size=ds_size), total=ds_size)):
-        data["X"][i] = d["X"]
-        data["u"][i] = d["u"]
-        data["Y"][i] = d["Y"]
-        data["s"][i] = d["s"]
+    
+    U = solver.generate_source_term(ds_size)
+    
+    def solve_single(u):
+        return fsolve(lambda s: solver.residual(s, u), np.zeros_like(u), xtol=1e-8)
+    
+    with multiprocessing.Pool() as p:
+        S_list = list(tqdm.tqdm(p.imap(solve_single, U), total=ds_size))
+    
+    S = np.array(S_list)
+    
+    data = {
+        "X": np.tile(solver.x, (ds_size, 1)).astype(np.float32),
+        "u": U.astype(np.float32),
+        "Y": np.tile(solver.x, (ds_size, 1)).astype(np.float32),
+        "s": S.astype(np.float32),
+    }
     
     # Hugging-Face expects (list-of-list) rather than raw ndarrays
     hf_ready = {k: v.tolist() for k, v in data.items()}

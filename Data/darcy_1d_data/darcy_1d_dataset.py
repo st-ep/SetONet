@@ -9,6 +9,8 @@ import torch
 import numpy as np
 from datasets import load_from_disk
 
+from Data.data_utils import sample_variable_sensor_points, apply_sensor_dropoff
+
 def load_darcy_dataset(data_path):
     """Load and return the Darcy 1D dataset."""
     try:
@@ -104,75 +106,57 @@ class DarcyDataGenerator:
         # Pre-extract query data (always fixed)
         self.s_queries = self.s_data[:, self.query_indices]   # [n_train, n_queries]
         
-        if not params['variable_sensors']:
-            # Fixed sensors: pre-extract sensor data for efficiency
-            self.sensor_indices = sensor_indices.to(device)
-            self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
-            print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (FIXED sensors)")
-        else:
-            # Variable sensors: don't pre-extract sensor data (will interpolate dynamically)
-            self.sensor_indices = None
-            self.u_sensors = None
-            print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (VARIABLE sensors with interpolation)")
+        self.train_sensor_dropoff = params.get('train_sensor_dropoff', 0.0)
+        self.replace_with_nearest = params.get('replace_with_nearest', False)
+        
+        # Fixed sensors: pre-extract sensor data for efficiency
+        self.sensor_indices = sensor_indices.to(device)
+        self.sensor_x = self.grid_points[self.sensor_indices].view(-1, 1)
+        self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
+        print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (FIXED sensors)")
+        
+        if self.train_sensor_dropoff > 0.0:
+            replacement_mode = "nearest replacement" if self.replace_with_nearest else "removal"
+            print(f"⚠️ Training with {self.train_sensor_dropoff:.1%} sensor dropout ({replacement_mode})")
         
     def generate_batch(self, batch_size):
         """OPTIMIZED: Generate a batch using pre-loaded GPU data."""
         # Random sampling directly on GPU (much faster)
         indices = torch.randint(0, self.n_train, (batch_size,), device=self.device)
         
-        if not self.params['variable_sensors']:
-            # Fixed sensors: use pre-extracted sensor data
-            u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
-        else:
-            # Variable sensors: generate new CONTINUOUS random sensor locations for this batch
-            from Data.data_utils import sample_variable_sensor_points
-            
-            # Generate truly random sensor locations from continuous domain [0,1]
-            current_sensor_x = sample_variable_sensor_points(
-                self.params['sensor_size'], 
-                self.input_range, 
-                self.device
-            ).squeeze(-1)  # [n_sensors] - remove the last dimension for interpolation
-            
-            # Interpolate sensor values at these arbitrary continuous locations
-            # This is the key improvement: we're not limited to grid points anymore!
-            u_batch = self.u_data[indices]  # [batch_size, n_grid]
-            u_at_sensors = interpolate_sensor_values(
-                u_batch, 
-                self.grid_points, 
-                current_sensor_x, 
-                self.device
-            )  # [batch_size, n_sensors]
-            
-            # Convert back to the expected format for return
-            current_sensor_x = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
+        # Fixed sensors: use pre-extracted sensor data
+        u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
+        batch_sensor_x = self.sensor_x
         
         # Query data is always the same
         s_at_queries = self.s_queries[indices]  # [batch_size, n_queries]
         
-        # Return sensor locations along with data for variable sensors
-        if self.params['variable_sensors']:
-            return u_at_sensors, s_at_queries, current_sensor_x
-        else:
-            return u_at_sensors, s_at_queries
+        if self.train_sensor_dropoff > 0.0:
+            sensor_x_batch_list = []
+            u_at_sensors_batch_list = []
+            
+            for sample_idx in range(batch_size):
+                sensor_x_dropped, u_at_sensors_dropped = apply_sensor_dropoff(
+                    batch_sensor_x,
+                    u_at_sensors[sample_idx],
+                    self.train_sensor_dropoff,
+                    self.replace_with_nearest
+                )
+                sensor_x_batch_list.append(sensor_x_dropped)
+                u_at_sensors_batch_list.append(u_at_sensors_dropped)
+            
+            batch_sensor_x = sensor_x_batch_list[0]
+            u_at_sensors = torch.stack(u_at_sensors_batch_list, dim=0)
+        
+        return u_at_sensors, s_at_queries, batch_sensor_x
 
 def create_sensor_points(params, device, grid_points):
-    """Create sensor points from the grid - fixed or variable based on params."""
-    if params['variable_sensors']:
-        # For variable sensors, we'll generate them dynamically during training
-        # But we still need to return initial sensor locations for setup
-        print(f"Using VARIABLE sensor locations (random {params['sensor_size']} CONTINUOUS locations per batch)")
-        print("Note: Sensor locations will be sampled from continuous domain [0,1] and interpolated")
-        # Return initial random sensor locations just for setup
-        sensor_indices = torch.randperm(len(grid_points))[:params['sensor_size']].sort()[0]
-        sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
-        return sensor_x, sensor_indices
-    else:
-        # Use fixed sensor locations - evenly spaced subset of grid points
-        sensor_indices = torch.linspace(0, len(grid_points)-1, params['sensor_size'], dtype=torch.long)
-        sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
-        print(f"Using {params['sensor_size']} FIXED sensor locations (evenly spaced)")
-        return sensor_x, sensor_indices
+    """Create fixed sensor points from the grid."""
+    # Use fixed sensor locations - evenly spaced subset of grid points
+    sensor_indices = torch.linspace(0, len(grid_points)-1, params['sensor_size'], dtype=torch.long)
+    sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
+    print(f"Using {params['sensor_size']} FIXED sensor locations (evenly spaced)")
+    return sensor_x, sensor_indices
 
 def create_query_points(params, device, grid_points, n_query_points):
     """Create query points for evaluation."""
@@ -191,7 +175,8 @@ def setup_parameters(args):
         'n_trunk_points_train': args.n_query_points,  # Query points are trunk points for Darcy
         'n_test_samples_eval': args.n_test_samples_eval,
         'sensor_seed': 42,
-        'variable_sensors': args.variable_sensors,
+        'variable_sensors': False,
         'eval_sensor_dropoff': args.eval_sensor_dropoff,
         'replace_with_nearest': args.replace_with_nearest,
+        'train_sensor_dropoff': args.train_sensor_dropoff,
     } 

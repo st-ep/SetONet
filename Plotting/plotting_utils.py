@@ -18,7 +18,8 @@ def plot_operator_comparison(
     is_inverse_task=False,    # New argument
     use_zero_constant: bool = True, # New argument to control d_coeff for plotting
     sensor_dropoff: float = 0.0,  # New argument for sensor drop-off
-    replace_with_nearest: bool = False  # New argument for nearest neighbor replacement
+    replace_with_nearest: bool = False,  # New argument for nearest neighbor replacement
+    sensors_to_plot_fraction: float = 0.3  # Fraction of sensors to plot (0.0 to 1.0)
 ):
     """
     Plots comparison between true and predicted functions for operator learning.
@@ -36,11 +37,16 @@ def plot_operator_comparison(
         use_zero_constant: Whether to use zero integration constant
         sensor_dropoff: Sensor drop-off rate to apply (same as training/evaluation)
         replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
+        sensors_to_plot_fraction: Fraction of sensors to plot for visualization (0.0 to 1.0)
     """
     print(f"Generating plots with {len(branch_input_locations)} branch points and {len(trunk_query_locations)} trunk points...")
     if sensor_dropoff > 0:
         replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
         print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
+    
+    # Calculate number of sensors to plot
+    n_sensors_to_plot = max(1, int(len(branch_input_locations) * sensors_to_plot_fraction))
+    print(f"🎯 Plotting {n_sensors_to_plot} out of {len(branch_input_locations)} sensors ({sensors_to_plot_fraction:.1%})") 
     
     # Note: For variable sensor training, we use fixed sensor locations for plotting
     # to ensure consistent visualization across different runs
@@ -134,7 +140,7 @@ def plot_operator_comparison(
         # Plot the input function (left subplot)
         axs[0, 0].plot(branch_input_locs_plot.squeeze(), branch_values_plot.squeeze(), 'b-', linewidth=2, label='Input Function')
         
-        # Plot sensor points (every 20th sensor point to avoid clutter)
+        # Plot specified fraction of sensor points for visualization
         if replace_with_nearest and sensor_dropoff > 0:
             # For nearest neighbor replacement, plot based on unique sensors only
             unique_sensor_locs, unique_indices = torch.unique(branch_input_locs_plot, dim=0, return_inverse=True)
@@ -148,23 +154,27 @@ def plot_operator_comparison(
             
             unique_sensor_values = np.array(unique_sensor_values)
             
-            # Plot every 20th unique sensor
-            sensor_indices = range(0, len(unique_sensor_locs), 20)
+            # Plot specified fraction of unique sensors
+            n_to_plot = max(1, int(len(unique_sensor_locs) * sensors_to_plot_fraction))
+            step_size = max(1, len(unique_sensor_locs) // n_to_plot)
+            sensor_indices = range(0, len(unique_sensor_locs), step_size)
             sensor_x_subset = unique_sensor_locs[sensor_indices]
             sensor_y_subset = unique_sensor_values[sensor_indices]
             
             axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
                              c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Unique sensors (every 20th)')
+                             label=f'Sensors ({len(sensor_x_subset)}/{len(unique_sensor_locs)} unique)')
         else:
-            # Normal case: plot every 20th sensor
-            sensor_indices = range(0, len(branch_input_locs_plot), 20)
+            # Normal case: plot specified fraction of sensors
+            n_to_plot = max(1, int(len(branch_input_locs_plot) * sensors_to_plot_fraction))
+            step_size = max(1, len(branch_input_locs_plot) // n_to_plot)
+            sensor_indices = range(0, len(branch_input_locs_plot), step_size)
             sensor_x_subset = branch_input_locs_plot[sensor_indices]
             sensor_y_subset = branch_values_plot[sensor_indices]
             
             axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
                              c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Sensors (every 20th)')
+                             label=f'Sensors ({len(sensor_x_subset)}/{len(branch_input_locs_plot)})')
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel(plot_ylabel_left)
@@ -295,19 +305,21 @@ def plot_darcy_comparison(
     replace_with_nearest: bool = False,
     dataset_split="test",
     batch_size=64,  # Add batch_size parameter to determine sample spacing
-    variable_sensors=False,  # Add parameter to handle variable sensor plotting
-    grid_points=None  # Grid points for variable sensor interpolation
+    variable_sensors=False,  # Always False now - kept for compatibility
+    grid_points=None,  # Kept for compatibility but not used
+    sensors_to_plot_fraction: float = 0.3  # Fraction of sensors to plot (0.0 to 1.0)
 ):
     """
     Plots comparison between true and predicted solutions for Darcy 1D dataset.
     Creates separate plots for each sample, with 2 subplots per plot (similar to derivative benchmark).
+    Always uses fixed sensor locations.
     
     Args:
         model_to_use: Trained SetONet model
         dataset: Darcy 1D dataset (HuggingFace dataset)
-        sensor_x: Sensor locations [n_sensors, 1] (used for test plots or when variable_sensors=False)
+        sensor_x: Fixed sensor locations [n_sensors, 1]
         query_x: Query locations [n_queries, 1] 
-        sensor_indices: Indices for sensor locations in the grid (used when variable_sensors=False)
+        sensor_indices: Indices for sensor locations in the grid
         query_indices: Indices for query locations in the grid
         log_dir: Directory to save plots
         num_samples_to_plot: Number of sample functions to plot
@@ -316,20 +328,19 @@ def plot_darcy_comparison(
         replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
         dataset_split: Which dataset split to use ("train" or "test")
         batch_size: Batch size used during evaluation (to select samples from different batches)
-        variable_sensors: Whether variable sensors were used during training
-        grid_points: Grid points for variable sensor interpolation (required if variable_sensors=True)
+        variable_sensors: Always False - kept for compatibility
+        grid_points: Kept for compatibility but not used
+        sensors_to_plot_fraction: Fraction of sensors to plot for visualization (0.0 to 1.0)
     """
     print(f"Generating Darcy 1D plots with {len(sensor_x)} sensor points and {len(query_x)} query points...")
     if sensor_dropoff > 0:
         replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
         print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
     
-    # Print sensor mode for clarity
-    if variable_sensors:
-        print(f"🔄 Using VARIABLE sensor locations for both train and test plots (same as training/evaluation)")
-        print(f"Note: Each plot will show different random sensor locations, reflecting actual model usage")
-    else:
-        print(f"📍 Using FIXED sensor locations for both train and test plots")
+    # Calculate number of sensors to plot
+    n_sensors_to_plot = max(1, int(len(sensor_x) * sensors_to_plot_fraction))
+    print(f"📍 Using FIXED sensor locations for both train and test plots")
+    print(f"🎯 Plotting {n_sensors_to_plot} out of {len(sensor_x)} sensors ({sensors_to_plot_fraction:.1%})")
     
     model_to_use.eval()
     device = next(model_to_use.parameters()).device
@@ -371,63 +382,9 @@ def plot_darcy_comparison(
         u_full = torch.tensor(sample['u'], dtype=torch.float32).to(device)
         s_full = torch.tensor(sample['s'], dtype=torch.float32).to(device)
         
-        # Determine sensor locations based on variable_sensors and dataset_split
-        if variable_sensors and dataset_split == "train":
-            # TRAIN plots with variable sensors: Generate new random sensor locations for each sample
-            # This reflects what actually happens during training
-            from Data.data_utils import sample_variable_sensor_points
-            
-            # Generate random sensor locations from continuous domain [0,1] (same as training)
-            current_sensor_x = sample_variable_sensor_points(
-                len(sensor_x), 
-                [0, 1],  # Darcy domain
-                device
-            ).squeeze(-1)  # [n_sensors] for interpolation
-            
-            # Interpolate sensor values at these arbitrary locations
-            # We need to import the interpolation function from the Darcy script
-            from Benchmarks.run_darcy_1d import interpolate_sensor_values
-            u_at_sensors_true = interpolate_sensor_values(
-                u_full.unsqueeze(0), 
-                grid_points.to(device), 
-                current_sensor_x, 
-                device
-            ).squeeze(0)  # Remove batch dimension
-            
-            # Convert sensor locations for plotting and model input
-            current_sensor_x = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
-            sensor_x_for_plot = current_sensor_x
-            sensor_indices_for_plot = None  # Not applicable for variable sensors
-        elif variable_sensors and dataset_split == "test":
-            # TEST plots with variable sensors: Also generate random sensor locations
-            # This reflects what actually happens during evaluation (now that we fixed it)
-            from Data.data_utils import sample_variable_sensor_points
-            
-            # Generate random sensor locations from continuous domain [0,1] (same as evaluation)
-            current_sensor_x = sample_variable_sensor_points(
-                len(sensor_x), 
-                [0, 1],  # Darcy domain
-                device
-            ).squeeze(-1)  # [n_sensors] for interpolation
-            
-            # Interpolate sensor values at these arbitrary locations
-            from Benchmarks.run_darcy_1d import interpolate_sensor_values
-            u_at_sensors_true = interpolate_sensor_values(
-                u_full.unsqueeze(0), 
-                grid_points.to(device), 
-                current_sensor_x, 
-                device
-            ).squeeze(0)  # Remove batch dimension
-            
-            # Convert sensor locations for plotting and model input
-            current_sensor_x = current_sensor_x.view(-1, 1)  # [n_sensors, 1]
-            sensor_x_for_plot = current_sensor_x
-            sensor_indices_for_plot = None  # Not applicable for variable sensors
-        else:
-            # FIXED sensors: Use the provided fixed sensor locations
-            u_at_sensors_true = u_full[sensor_indices]
-            sensor_x_for_plot = sensor_x
-            sensor_indices_for_plot = sensor_indices
+        # Always use fixed sensor locations
+        u_at_sensors_true = u_full[sensor_indices]
+        sensor_x_for_plot = sensor_x
         
         s_at_queries_true = s_full[query_indices]
 
@@ -435,7 +392,7 @@ def plot_darcy_comparison(
         if sensor_dropoff > 0.0:
             from Data.data_utils import apply_sensor_dropoff
             
-            # Apply drop-off to sensor data using the correct sensor locations
+            # Apply drop-off to sensor data
             sensor_x_device = sensor_x_for_plot.clone().to(device)
             sensor_locs_dropped, sensor_values_dropped = apply_sensor_dropoff(
                 sensor_x_device, u_at_sensors_true, sensor_dropoff, replace_with_nearest
@@ -450,7 +407,7 @@ def plot_darcy_comparison(
             u_at_sensors_model = sensor_values_dropped
             actual_n_sensors = len(sensor_x_plot)
         else:
-            # No drop-off - use the determined sensor locations
+            # No drop-off - use fixed sensor locations
             sensor_x_plot = sensor_x_for_plot.cpu()
             u_at_sensors_plot = u_at_sensors_true.cpu().numpy()
             sensor_x_model = sensor_x_for_plot
@@ -460,7 +417,7 @@ def plot_darcy_comparison(
         # Plot input source term u(x) with sensor points (left subplot)
         axs[0, 0].plot(x_grid.cpu(), u_full.cpu(), 'b-', linewidth=2, label='Input Source Term $u(x)$')
         
-        # Plot sensor points (every nth sensor point to avoid clutter)
+        # Plot specified fraction of sensor points for visualization
         if replace_with_nearest and sensor_dropoff > 0:
             # For nearest neighbor replacement, plot based on unique sensors only
             unique_sensor_locs, unique_indices = torch.unique(sensor_x_plot, dim=0, return_inverse=True)
@@ -474,34 +431,33 @@ def plot_darcy_comparison(
             
             unique_sensor_values = np.array(unique_sensor_values)
             
-            # Plot every nth unique sensor
-            step_size = max(1, len(unique_sensor_locs)//10)
+            # Plot specified fraction of unique sensors
+            n_to_plot = max(1, int(len(unique_sensor_locs) * sensors_to_plot_fraction))
+            step_size = max(1, len(unique_sensor_locs) // n_to_plot)
             sensor_indices_plot = range(0, len(unique_sensor_locs), step_size)
             sensor_x_subset = unique_sensor_locs[sensor_indices_plot]
             sensor_y_subset = unique_sensor_values[sensor_indices_plot]
             
             axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
                              c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Unique sensors (every {step_size}th)')
+                             label=f'Sensors ({len(sensor_x_subset)}/{len(unique_sensor_locs)} unique)')
         else:
-            # Normal case: plot every nth sensor
-            step_size = max(1, len(sensor_x_plot)//10)
+            # Normal case: plot specified fraction of sensors
+            n_to_plot = max(1, int(len(sensor_x_plot) * sensors_to_plot_fraction))
+            step_size = max(1, len(sensor_x_plot) // n_to_plot)
             sensor_indices_plot = range(0, len(sensor_x_plot), step_size)
             sensor_x_subset = sensor_x_plot[sensor_indices_plot]
             sensor_y_subset = u_at_sensors_plot[sensor_indices_plot]
             
             axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
                              c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Sensors (every {step_size}th)')
+                             label=f'Sensors ({len(sensor_x_subset)}/{len(sensor_x_plot)})')
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel('$u(x)$')
         
-        # Create title that reflects sensor type
-        if variable_sensors:
-            title_suffix = f"(Sample {sample_idx}, Variable Sensors)"
-        else:
-            title_suffix = f"(Sample {sample_idx}, Fixed Sensors)"
+        # Create title with sample info
+        title_suffix = f"(Sample {sample_idx})"
         axs[0, 0].set_title(f'Input Source Term $u(x)$ {title_suffix}')
         axs[0, 0].grid(True, alpha=0.3)
         axs[0, 0].legend()
