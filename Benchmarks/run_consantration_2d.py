@@ -23,7 +23,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for 2D concentration problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="Data/concentration_data/chem_plume_dataset", 
+    parser.add_argument('--data_path', type=str, default="Data/concentration_data/chem_plume_adaptive_dataset4.0_n4096_N25_P30", 
                        help='Path to Concentration 2D dataset')
     parser.add_argument('--adaptive_mesh', action='store_true', help='Use adaptive mesh dataset (auto-detected from data)')
     

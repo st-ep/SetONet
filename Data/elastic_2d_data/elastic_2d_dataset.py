@@ -9,15 +9,24 @@ import numpy as np
 import torch
 import json
 from datasets import load_from_disk
+from Data.data_utils import apply_sensor_dropoff
 
 class ElasticDataset:
     """Dataset wrapper for Elastic plate data that uses pre-normalized data."""
     
-    def __init__(self, dataset, batch_size=64, device='cuda'):
+    def __init__(self, dataset, batch_size=64, device='cuda', train_sensor_dropoff=0.0, replace_with_nearest=False):
         print("Loading pre-normalized Elastic dataset...")
         
         self.batch_size = batch_size
         self.device = device
+        self.train_sensor_dropoff = train_sensor_dropoff
+        self.replace_with_nearest = replace_with_nearest
+        
+        # Print sensor dropout configuration for training
+        if self.train_sensor_dropoff > 0.0:
+            replacement_mode = "nearest neighbor replacement" if self.replace_with_nearest else "removal"
+            print(f"Training dataset configured with sensor drop-off rate: {self.train_sensor_dropoff:.1%} ({replacement_mode})")
+        
         train_data = dataset['train']
         self.n_samples = len(train_data)
         
@@ -65,6 +74,32 @@ class ElasticDataset:
         ys = self.Y_data[indices]
         G_u_ys = self.s_data[indices].unsqueeze(-1)
         
+        # Apply sensor dropout during training if specified
+        if self.train_sensor_dropoff > 0.0:
+            xs_dropped_list = []
+            us_dropped_list = []
+            
+            # Apply sensor dropout to each sample in the batch
+            for i in range(self.batch_size):
+                # Remove batch dimension for dropout function
+                xs_single = xs[i]  # Shape: (n_sensors, 2)
+                us_single = us[i].squeeze(-1)  # Shape: (n_sensors,)
+                
+                # Apply sensor dropout
+                xs_dropped, us_dropped = apply_sensor_dropoff(
+                    xs_single, 
+                    us_single, 
+                    self.train_sensor_dropoff, 
+                    self.replace_with_nearest
+                )
+                
+                xs_dropped_list.append(xs_dropped)
+                us_dropped_list.append(us_dropped)
+            
+            # Stack the results back into batches
+            xs = torch.stack(xs_dropped_list, dim=0)
+            us = torch.stack(us_dropped_list, dim=0).unsqueeze(-1)
+        
         return xs, us, ys, G_u_ys, None
     
     def denormalize_displacement(self, s_norm):
@@ -79,7 +114,8 @@ class ElasticDataset:
         """Coordinates are not normalized, so return as-is."""
         return coords_norm
 
-def load_elastic_dataset(data_path="/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset", batch_size=64, device='cuda'):
+def load_elastic_dataset(data_path="/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset", 
+                        batch_size=64, device='cuda', train_sensor_dropoff=0.0, replace_with_nearest=False):
     """Load elastic dataset and return dataset wrapper."""
     print(f"Loading dataset from: {data_path}")
     try:
@@ -87,7 +123,13 @@ def load_elastic_dataset(data_path="/home/titanv/Stepan/setprojects/SetONet/Data
         print(f"Dataset loaded: {len(dataset['train'])} train, {len(dataset['test'])} test samples")
         
         # Create dataset wrapper
-        elastic_dataset = ElasticDataset(dataset, batch_size=batch_size, device=device)
+        elastic_dataset = ElasticDataset(
+            dataset, 
+            batch_size=batch_size, 
+            device=device,
+            train_sensor_dropoff=train_sensor_dropoff,
+            replace_with_nearest=replace_with_nearest
+        )
         
         return dataset, elastic_dataset
     except Exception as e:

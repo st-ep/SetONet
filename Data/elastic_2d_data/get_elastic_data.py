@@ -107,8 +107,8 @@ def generate_elastic_data():
     # Setup coordinate systems
     print("Setting up coordinate systems...")
     
-    # Force coordinates: boundary edge at x=1, y from -1 to 1
-    force_y_coords = np.linspace(-1, 1, n_force_points, dtype=np.float32)
+    # Force coordinates: boundary edge at x=1, y from 0 to 1 (matching displacement field domain)
+    force_y_coords = np.linspace(0, 1, n_force_points, dtype=np.float32)
     force_x_coords = np.ones_like(force_y_coords, dtype=np.float32)
     
     # Mesh coordinates for displacement output

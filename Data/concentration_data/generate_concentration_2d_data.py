@@ -347,8 +347,8 @@ def main():
     
     # Adaptive mesh parameters
     parser.add_argument("--adaptive_mesh", action="store_true", help="Use adaptive mesh focused on concentration peaks")
-    parser.add_argument("--spike_focus", type=float, default=10.0, help="Focus strength on peaks (0=uniform, higher=more focused)")
-    parser.add_argument("--n_adaptive_points", type=int, default=8192, help="Number of adaptive grid points")
+    parser.add_argument("--spike_focus", type=float, default=4.0, help="Focus strength on peaks (0=uniform, higher=more focused)")
+    parser.add_argument("--n_adaptive_points", type=int, default=4096, help="Number of adaptive grid points")
     parser.add_argument("--initial_grid_size", type=int, default=25, help="Size of initial uniform grid (NxN)")
 
     args = parser.parse_args()
