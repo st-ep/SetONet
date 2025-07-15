@@ -172,6 +172,9 @@ Thumbs.db
 *.png
 *.json
 *.arrow
+*.mat
+*.0
+*.npy
 
 # Your specific log directory
 logs/
