@@ -7,7 +7,7 @@ import argparse
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
-project_root = os.path.dirname(os.path.dirname(current_script_path))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -24,7 +24,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for Darcy 1D equation.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/darcy_1d_data/darcy_1d_dataset_501", 
+    parser.add_argument('--data_path', type=str, default="Data/darcy_1d_data/darcy_1d_dataset_501", 
                        help='Path to Darcy 1D dataset')
     parser.add_argument('--sensor_size', type=int, default=301, help='Number of sensor locations (max 501 for Darcy 1D grid)')
     
@@ -40,7 +40,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=50, help='Number of epochs for SetONet')
+    parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 50000, 100000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
@@ -65,7 +65,7 @@ def parse_arguments():
 
 def setup_logging():
     """Setup logging directory."""
-    logs_base_in_project = os.path.join("/home/titanv/Stepan/setprojects/SetONet", "logs")
+    logs_base_in_project = os.path.join("logs")
     model_folder_name = "SetONet_darcy_1d"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)

@@ -17,6 +17,10 @@ import time
 import os
 import json
 
+# Get paths relative to this file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+
 def normalize_data(data, axis=None):
     """
     Normalize data to zero mean and unit variance.
@@ -57,16 +61,16 @@ def generate_chladni_data():
     gamma = 0.02  # damping_adjustment
     v = 0.5
     
-    numPoints = 64
+    numPoints = 20
     x = np.linspace(0, L, numPoints)
     y = np.linspace(0, M, numPoints)
     
     n_range = 6
     m_range = 6
     
-    N_total = 11000   # total number of samples
-    N_train = 10000   # number of training samples
-    N_test = 1000     # number of testing samples
+    N_total = 1100   # total number of samples
+    N_train = 1000   # number of training samples
+    N_test = 100     # number of testing samples
     
     # Initialize storage arrays
     alpha_full = np.zeros((n_range, m_range, N_total))
@@ -160,8 +164,8 @@ def generate_chladni_data():
             plt.gca().set_facecolor('black')
             
             # Save the plot
-            plt.savefig(f'/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_sample_{k+1}.png', 
-                       facecolor='black', edgecolor='white', dpi=150)
+            plot_save_path = os.path.join(current_dir, f'chladni_sample_{k+1}.png')
+            plt.savefig(plot_save_path, facecolor='black', edgecolor='white', dpi=150)
             plt.show()
     
     print("Sample generation complete. Starting data preprocessing...")
@@ -233,17 +237,19 @@ def generate_chladni_data():
     ds = Dataset.from_dict(full_dataset)
     ds = ds.train_test_split(test_size=N_test, shuffle=False)
     
-    dataset_path = "/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_dataset"
+    dataset_path = os.path.join(current_dir, "chladni_dataset")
     ds.save_to_disk(dataset_path)
     
-    with open('/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_normalization_stats.json', 'w') as f:
+    normalization_stats_path = os.path.join(current_dir, 'chladni_normalization_stats.json')
+    with open(normalization_stats_path, 'w') as f:
         json.dump(normalization_stats, f, indent=2)
     
     print(f"Dataset saved: {len(ds['train'])} train, {len(ds['test'])} test samples")
-    print(f"Normalization stats saved to: /home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_normalization_stats.json")
+    print(f"Normalization stats saved to: {normalization_stats_path}")
     
     # Save original arrays for reference
-    np.savez_compressed('/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/ChladniData_original.npz',
+    original_data_path = os.path.join(current_dir, 'ChladniData_original.npz')
+    np.savez_compressed(original_data_path,
                        alpha_full=alpha_full, S_full=S_full, Z_full=Z_full,
                        x=x, y=y, L=L, M=M, omega=omega, t_fixed=t_fixed,
                        gamma=gamma, v=v, numPoints=numPoints,
@@ -254,21 +260,25 @@ def generate_chladni_data():
 def load_chladni_data():
     """Load the generated Chladni data in SetONet format."""
     try:
-        ds = load_from_disk('/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_dataset')
+        dataset_path = os.path.join(current_dir, 'chladni_dataset')
+        ds = load_from_disk(dataset_path)
         return ds
     except:
         # Fallback to original format if SetONet format not available
-        data = np.load('/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/ChladniData_original.npz')
+        original_data_path = os.path.join(current_dir, 'ChladniData_original.npz')
+        data = np.load(original_data_path)
         return {key: data[key] for key in data.keys()}
 
 def load_chladni_normalization_stats():
     """Load the normalization statistics for the Chladni dataset."""
-    with open('/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_normalization_stats.json', 'r') as f:
+    normalization_stats_path = os.path.join(current_dir, 'chladni_normalization_stats.json')
+    with open(normalization_stats_path, 'r') as f:
         return json.load(f)
 
 def load_chladni_original():
     """Load the original Chladni data arrays."""
-    data = np.load('/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/ChladniData_original.npz')
+    original_data_path = os.path.join(current_dir, 'ChladniData_original.npz')
+    data = np.load(original_data_path)
     return {key: data[key] for key in data.keys()}
 
 if __name__ == "__main__":

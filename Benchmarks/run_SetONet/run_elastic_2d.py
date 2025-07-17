@@ -7,7 +7,7 @@ import argparse
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
-project_root = os.path.dirname(os.path.dirname(current_script_path))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -23,7 +23,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for Elastic 2D plate problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset", 
+    # Default path relative to project root
+    default_data_path = os.path.join(project_root, "Data", "elastic_2d_data", "elastic_dataset")
+    parser.add_argument('--data_path', type=str, default=default_data_path, 
                        help='Path to Elastic 2D dataset')
     
     # Model architecture
@@ -204,7 +206,7 @@ def main():
     dataset, elastic_dataset = load_elastic_dataset(
         data_path=args.data_path,
         batch_size=args.batch_size,
-        device=device,
+        device=str(device),
         train_sensor_dropoff=args.train_sensor_dropoff,
         replace_with_nearest=args.replace_with_nearest
     )

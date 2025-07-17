@@ -7,7 +7,7 @@ import argparse
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
-project_root = os.path.dirname(os.path.dirname(current_script_path))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -139,7 +139,11 @@ def generate_plots(setonet_model, params, log_dir, benchmark, sensor_x_original)
                 )
                 
                 # Extract the sensor locations used for this batch
-                _, _, _, _, _, actual_sensor_locations = batch_data
+                # When variable_sensors=True, the last element is the sensor locations
+                if len(batch_data) == 6:
+                    actual_sensor_locations = batch_data[5]
+                else:
+                    raise ValueError("Expected 6 return values when variable_sensors=True")
                 
                 plot_operator_comparison(
                     model_to_use=setonet_model,

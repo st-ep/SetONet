@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.ticker import FormatStrFormatter
 
 def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, save_path=None, eval_sensor_dropoff=0.0, replace_with_nearest=False):
     """Plot input forces, predicted displacements, and ground truth for Chladni plate."""
@@ -70,29 +72,125 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
     pred_2d = pred_orig.cpu().numpy().reshape(grid_size, grid_size)
     target_2d = target_orig.cpu().numpy().reshape(grid_size, grid_size)
     
-    # Create plot
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Calculate absolute error
+    abs_error = np.abs(pred_2d - target_2d)
+    
+    # Compute shared vmin/vmax for prediction and ground truth displacements
+    vmin_shared = min(pred_2d.min(), target_2d.min())
+    vmax_shared = max(pred_2d.max(), target_2d.max())
+    
+    # Compute scaling orders for colorbars
+    forces_vabs = max(abs(forces_2d.min()), abs(forces_2d.max()))
+    forces_order = int(np.floor(np.log10(forces_vabs))) if forces_vabs > 0 else 0
+    
+    shared_vabs = max(abs(vmin_shared), abs(vmax_shared))
+    shared_order = int(np.floor(np.log10(shared_vabs))) if shared_vabs > 0 else 0
+    
+    error_vabs = np.max(abs_error)
+    error_order = int(np.floor(np.log10(error_vabs))) if error_vabs > 0 else 0
+    
+    # Create figure with GridSpec for custom widths and variable spacing
+    fig = plt.figure(figsize=(28, 6))
+    plot_ratios = [1, 1, 1, 1]  # Equal ratios for all four plots
+    has_colorbar = [True, False, True, True]  # Input Forces: yes, Predicted: no, Ground Truth: yes, Error: yes
+    cb_ratio = 0.05  # Colorbar width ratio
+    cb_spacer = 0.001  # Small spacer between plot and its colorbar
+    wspaces = [0.2, 0.05, 0.2]  # Custom spaces: normal between 1-2, tight between 2-3, normal between 3-4
+    
+    # Build full ratio list including spaces and colorbars
+    num_plots = len(plot_ratios)
+    avg_width = sum(plot_ratios) / num_plots
+    spacer_widths = [w * avg_width for w in wspaces]
+    full_ratios = []
+    col_starts = []
+    current_col = 0
+    
+    for i in range(num_plots):
+        if i > 0:
+            full_ratios.append(spacer_widths[i-1])
+            current_col += 1
+        full_ratios.append(plot_ratios[i])
+        col_starts.append(current_col)
+        current_col += 1
+        if has_colorbar[i]:
+            # Add small spacer before colorbar
+            full_ratios.append(cb_spacer)
+            current_col += 1
+            full_ratios.append(cb_ratio)
+            current_col += 1
+    
+    gs = fig.add_gridspec(1, len(full_ratios), width_ratios=full_ratios, wspace=0)
+    axes = [fig.add_subplot(gs[0, col_starts[j]]) for j in range(num_plots)]
+    
+    # Create colorbar axes where needed
+    cb_axes = {}
+    for i in range(num_plots):
+        if has_colorbar[i]:
+            cb_col = col_starts[i] + 2  # +2 because of the spacer
+            cb_axes[i] = fig.add_subplot(gs[0, cb_col])
+    
+    # Apply scaling to data
+    forces_scaled = forces_2d * (10 ** -forces_order)
+    pred_scaled = pred_2d * (10 ** -shared_order)
+    target_scaled = target_2d * (10 ** -shared_order)
+    error_scaled = abs_error * (10 ** -error_order)
+    
+    # Scale vmin/vmax for shared colorbar
+    vmin_scaled = vmin_shared * (10 ** -shared_order)
+    vmax_scaled = vmax_shared * (10 ** -shared_order)
     
     # Input forces
-    im1 = axes[0].contourf(x_coords, y_coords, forces_2d, levels=20, cmap='RdBu_r')
-    axes[0].set_title(f'Input Forces - Sample {sample_idx}{dropout_info}')
-    axes[0].set_xlabel('X (m)')
-    axes[0].set_ylabel('Y (m)')
-    plt.colorbar(im1, ax=axes[0])
+    im1 = axes[0].contourf(x_coords, y_coords, forces_scaled, levels=20, cmap='Spectral_r')
+    axes[0].set_title('Input Forces', fontsize=18, pad=20)
+    axes[0].set_xlabel('X (m)', fontsize=16)
+    axes[0].set_ylabel('Y (m)', fontsize=16)
+    axes[0].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
+    axes[0].tick_params(axis='both', which='major', labelsize=14)
+    axes[0].xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    axes[0].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    cbar1 = plt.colorbar(im1, cax=cb_axes[0], format='%.1f')
+    cbar1.ax.set_title(f'10^{{{forces_order}}}', fontsize=16, pad=20)
+    cbar1.ax.tick_params(labelsize=16)
     
-    # Predicted displacements
-    im2 = axes[1].contourf(x_coords, y_coords, pred_2d, levels=20, cmap='viridis')
-    axes[1].set_title(f'Predicted Displacements{dropout_info}')
-    axes[1].set_xlabel('X (m)')
-    axes[1].set_ylabel('Y (m)')
-    plt.colorbar(im2, ax=axes[1])
+    # Predicted displacements (no colorbar, shared scale)
+    im2 = axes[1].contourf(x_coords, y_coords, pred_scaled, levels=20, cmap='RdBu_r', vmin=vmin_scaled, vmax=vmax_scaled)
+    # Add zero displacement contour lines (Chladni nodal lines)
+    axes[1].contour(x_coords, y_coords, pred_scaled, levels=[0], colors='gold', linewidths=2, alpha=1.0, linestyles='-')
+    axes[1].set_title('Prediction', fontsize=18, pad=20)
+    axes[1].set_xlabel('X (m)', fontsize=16)
+    axes[1].set_ylabel('Y (m)', fontsize=16)
+    axes[1].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
+    axes[1].tick_params(axis='both', which='major', labelsize=14)
+    axes[1].xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    axes[1].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     
-    # Ground truth displacements
-    im3 = axes[2].contourf(x_coords, y_coords, target_2d, levels=20, cmap='viridis')
-    axes[2].set_title('Ground Truth Displacements')
-    axes[2].set_xlabel('X (m)')
-    axes[2].set_ylabel('Y (m)')
-    plt.colorbar(im3, ax=axes[2])
+    # Ground truth displacements (with shared colorbar)
+    im3 = axes[2].contourf(x_coords, y_coords, target_scaled, levels=20, cmap='RdBu_r', vmin=vmin_scaled, vmax=vmax_scaled)
+    # Add zero displacement contour lines (Chladni nodal lines)
+    axes[2].contour(x_coords, y_coords, target_scaled, levels=[0], colors='gold', linewidths=2, alpha=1.0, linestyles='-')
+    axes[2].set_title('Ground Truth', fontsize=18, pad=20)
+    axes[2].set_xlabel('X (m)', fontsize=16)
+    axes[2].set_ylabel('Y (m)', fontsize=16)
+    axes[2].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
+    axes[2].tick_params(axis='both', which='major', labelsize=14)
+    axes[2].xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    axes[2].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    cbar3 = plt.colorbar(im3, cax=cb_axes[2], format='%.1f')
+    cbar3.ax.set_title(f'10^{{{shared_order}}}', fontsize=16, pad=20)
+    cbar3.ax.tick_params(labelsize=16)
+    
+    # Absolute error (with its own colorbar)
+    im4 = axes[3].contourf(x_coords, y_coords, error_scaled, levels=20, cmap='coolwarm')
+    axes[3].set_title('Absolute Error', fontsize=18, pad=20)
+    axes[3].set_xlabel('X (m)', fontsize=16)
+    axes[3].set_ylabel('Y (m)', fontsize=16)
+    axes[3].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
+    axes[3].tick_params(axis='both', which='major', labelsize=14)
+    axes[3].xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    axes[3].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    cbar4 = plt.colorbar(im4, cax=cb_axes[3], format='%.1f')
+    cbar4.ax.set_title(f'10^{{{error_order}}}', fontsize=16, pad=20)
+    cbar4.ax.tick_params(labelsize=16)
     
     plt.tight_layout()
     

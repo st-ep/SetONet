@@ -7,7 +7,7 @@ import argparse
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
-project_root = os.path.dirname(os.path.dirname(current_script_path))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -16,15 +16,15 @@ from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
 from Plotting.plot_chladni_utils import plot_chladni_results
-from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset
+from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset, ChladniDataset
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train SetONet for Chladni plate problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_dataset", 
-                       help='Path to Chladni dataset')
+    parser.add_argument('--data_path', type=str, default=None, 
+                       help='Path to Chladni dataset (if None, uses Data/chladni_data/chladni_dataset relative to project root)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=128, help='Latent dimension p for SetONet')
@@ -52,6 +52,10 @@ def parse_arguments():
     # Evaluation robustness testing (sensor failures)
     parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
     parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
+    
+    # GPU selection
+    parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use (0, 1, etc.). If not specified, uses CUDA_VISIBLE_DEVICES or auto-detects')
     
     return parser.parse_args()
 
@@ -188,18 +192,37 @@ def main():
     if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
         raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
     
+    if not 0.0 <= args.train_sensor_dropoff <= 1.0:
+        raise ValueError("--train_sensor_dropoff must be between 0.0 and 1.0")
+
+    if args.train_sensor_dropoff > 0.0:
+        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
+        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} ({replacement_mode})")
+        print("(This makes the model more robust to sensor failures)")
+    
+    # Setup data path
+    if args.data_path is None:
+        args.data_path = os.path.join(project_root, "Data", "chladni_data", "chladni_dataset")
+    
     # Setup logging
     log_dir = setup_logging(project_root)
     
     # Load dataset using the new function
-    dataset, chladni_dataset = load_chladni_dataset(
+    dataset, _ = load_chladni_dataset(
         data_path=args.data_path,
         batch_size=args.batch_size,
-        device=device
+        device=str(device)  # Convert device to string
     )
     
-    if dataset is None or chladni_dataset is None:
+    if dataset is None:
         return
+    
+    # Create dataset wrapper with corresponding normalization stats path
+    normalization_stats_path = os.path.join(os.path.dirname(args.data_path), 'chladni_normalization_stats.json')
+    chladni_dataset = ChladniDataset(dataset, batch_size=args.batch_size, device=str(device), 
+                                   normalization_stats_path=normalization_stats_path,
+                                   train_sensor_dropoff=args.train_sensor_dropoff,
+                                   replace_with_nearest=args.replace_with_nearest)
     
     # Create model
     print("Creating SetONet model...")

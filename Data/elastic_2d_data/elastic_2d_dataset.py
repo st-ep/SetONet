@@ -8,8 +8,13 @@ from __future__ import annotations
 import numpy as np
 import torch
 import json
+import os
 from datasets import load_from_disk
 from Data.data_utils import apply_sensor_dropoff
+
+# Get paths relative to this file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
 
 class ElasticDataset:
     """Dataset wrapper for Elastic plate data that uses pre-normalized data."""
@@ -57,7 +62,8 @@ class ElasticDataset:
         print(f"  - Mesh points: {self.n_mesh_points}")
         
         # Load normalization statistics
-        with open('/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_normalization_stats.json', 'r') as f:
+        stats_path = os.path.join(current_dir, 'elastic_normalization_stats.json')
+        with open(stats_path, 'r') as f:
             stats = json.load(f)
         
         self.u_mean = torch.tensor(stats['u_mean'], device=device, dtype=torch.float32)
@@ -114,9 +120,12 @@ class ElasticDataset:
         """Coordinates are not normalized, so return as-is."""
         return coords_norm
 
-def load_elastic_dataset(data_path="/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset", 
+def load_elastic_dataset(data_path=None, 
                         batch_size=64, device='cuda', train_sensor_dropoff=0.0, replace_with_nearest=False):
     """Load elastic dataset and return dataset wrapper."""
+    if data_path is None:
+        data_path = os.path.join(current_dir, "elastic_dataset")
+    
     print(f"Loading dataset from: {data_path}")
     try:
         dataset = load_from_disk(data_path)
