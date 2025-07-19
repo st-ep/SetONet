@@ -61,16 +61,16 @@ def generate_chladni_data():
     gamma = 0.02  # damping_adjustment
     v = 0.5
     
-    numPoints = 20
+    numPoints = 32
     x = np.linspace(0, L, numPoints)
     y = np.linspace(0, M, numPoints)
     
     n_range = 6
     m_range = 6
     
-    N_total = 1100   # total number of samples
-    N_train = 1000   # number of training samples
-    N_test = 100     # number of testing samples
+    N_total = 11000   # total number of samples
+    N_train = 10000   # number of training samples
+    N_test = 1000     # number of testing samples
     
     # Initialize storage arrays
     alpha_full = np.zeros((n_range, m_range, N_total))

@@ -58,11 +58,24 @@ def plot_operator_comparison(
         print("No model provided to plot_operator_comparison. Skipping plot.")
         return
 
-    model_name_str = "SetONet"
+    if hasattr(model_to_use, 'forward_branch'):
+        model_name_str = "SetONet"
+    else:
+        model_name_str = "DeepONet"
 
     # Ensure locations are on CPU for numpy ops and plotting, but keep original device versions for model input
     branch_input_locs_cpu = branch_input_locations.cpu()
     trunk_query_locs_cpu = trunk_query_locations.cpu().squeeze() # Squeeze for 1D plotting
+
+    # Set larger font sizes for better readability
+    plt.rcParams.update({
+        'font.size': 14,          # Default text size
+        'axes.labelsize': 16,     # X and Y labels
+        'xtick.labelsize': 16,    # X axis tick labels
+        'ytick.labelsize': 16,    # Y axis tick labels
+        'legend.fontsize': 16,    # Legend text (line labels)
+        'axes.titlesize': 18      # Title text (not used but set for consistency)
+    })
 
     for i in range(num_samples_to_plot):
         fig, axs = plt.subplots(1, 2, figsize=(14, 6), squeeze=False)
@@ -88,9 +101,7 @@ def plot_operator_comparison(
             branch_values_true = f_true(branch_input_locs_cpu) # f(x_i)
             operator_output_true = df_true(trunk_query_locs_cpu) # f'(y_j)
             
-            plot_title_left = f'Input Function $f(x)$ (Sample {i+1})'
             plot_ylabel_left = '$f(x)$'
-            plot_title_right = f'Output: True vs Predicted $f\'(x)$ (Sample {i+1})'
             plot_ylabel_right = '$f\'(x)$'
             task_type_str = "derivative"
             
@@ -98,9 +109,7 @@ def plot_operator_comparison(
             branch_values_true = df_true(branch_input_locs_cpu) # f'(x_i)
             operator_output_true = f_true(trunk_query_locs_cpu) # f(y_j)
             
-            plot_title_left = f'Input Function $f\'(x)$ (Sample {i+1})'
             plot_ylabel_left = '$f\'(x)$'
-            plot_title_right = f'Output: True vs Predicted $f(x)$ (Sample {i+1})'
             plot_ylabel_right = '$f(x)$'
             task_type_str = "integral"
 
@@ -137,48 +146,12 @@ def plot_operator_comparison(
             branch_values_model = torch.tensor(branch_values_true_np, device=device, dtype=torch.float32).squeeze()
             actual_n_sensors = len(branch_input_locs_cpu)
 
-        # Plot the input function (left subplot)
+        # Plot the input function (left subplot) - NO SENSOR POINTS
         axs[0, 0].plot(branch_input_locs_plot.squeeze(), branch_values_plot.squeeze(), 'b-', linewidth=2, label='Input Function')
-        
-        # Plot specified fraction of sensor points for visualization
-        if replace_with_nearest and sensor_dropoff > 0:
-            # For nearest neighbor replacement, plot based on unique sensors only
-            unique_sensor_locs, unique_indices = torch.unique(branch_input_locs_plot, dim=0, return_inverse=True)
-            unique_sensor_values = []
-            
-            # Get values corresponding to unique locations
-            for i, unique_loc in enumerate(unique_sensor_locs):
-                # Find first occurrence of this unique location
-                first_idx = (branch_input_locs_plot == unique_loc.unsqueeze(0)).all(dim=1).nonzero()[0].item()
-                unique_sensor_values.append(branch_values_plot[first_idx])
-            
-            unique_sensor_values = np.array(unique_sensor_values)
-            
-            # Plot specified fraction of unique sensors
-            n_to_plot = max(1, int(len(unique_sensor_locs) * sensors_to_plot_fraction))
-            step_size = max(1, len(unique_sensor_locs) // n_to_plot)
-            sensor_indices = range(0, len(unique_sensor_locs), step_size)
-            sensor_x_subset = unique_sensor_locs[sensor_indices]
-            sensor_y_subset = unique_sensor_values[sensor_indices]
-            
-            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
-                             c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Sensors ({len(sensor_x_subset)}/{len(unique_sensor_locs)} unique)')
-        else:
-            # Normal case: plot specified fraction of sensors
-            n_to_plot = max(1, int(len(branch_input_locs_plot) * sensors_to_plot_fraction))
-            step_size = max(1, len(branch_input_locs_plot) // n_to_plot)
-            sensor_indices = range(0, len(branch_input_locs_plot), step_size)
-            sensor_x_subset = branch_input_locs_plot[sensor_indices]
-            sensor_y_subset = branch_values_plot[sensor_indices]
-            
-            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
-                             c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Sensors ({len(sensor_x_subset)}/{len(branch_input_locs_plot)})')
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel(plot_ylabel_left)
-        axs[0, 0].set_title(plot_title_left)
+        # NO TITLE: axs[0, 0].set_title(plot_title_left)
         axs[0, 0].grid(True, alpha=0.3)
         axs[0, 0].legend()
 
@@ -187,27 +160,29 @@ def plot_operator_comparison(
             # Prepare inputs for the model (must be on model_device)
             trunk_query_locs_model_dev = trunk_query_locations.clone().to(device)
 
-            # Use prepare_setonet_inputs
-            from Models.utils.helper_utils import prepare_setonet_inputs
-            
-            xs, us, ys = prepare_setonet_inputs(
-                branch_input_locs_model,
-                1,  # batch_size = 1 for single sample
-                branch_values_model.unsqueeze(-1),  # Add feature dimension
-                trunk_query_locs_model_dev,
-                actual_n_sensors  # Use actual number of sensors after drop-off
-            )
+            if hasattr(model_to_use, 'forward_branch'):  # SetONet
+                xs, us, ys = prepare_setonet_inputs(
+                    branch_input_locs_model,
+                    1,  # batch_size = 1 for single sample
+                    branch_values_model.unsqueeze(-1),  # Add feature dimension
+                    trunk_query_locs_model_dev,
+                    actual_n_sensors  # Use actual number of sensors after drop-off
+                )
 
-            # Get model prediction
-            operator_output_pred = model_to_use(xs, us, ys)
-            operator_output_pred = operator_output_pred.squeeze().cpu().numpy()
+                # Get model prediction
+                operator_output_pred = model_to_use(xs, us, ys)
+                operator_output_pred = operator_output_pred.squeeze().cpu().numpy()
+            else:  # DeepONet
+                branch_input = branch_values_model.unsqueeze(0)  # [1, actual_n_sensors]
+                trunk_input = trunk_query_locs_model_dev.unsqueeze(0)  # [1, n_trunk, 1]
+                operator_output_pred = model_to_use(branch_input, trunk_input).squeeze().cpu().numpy()
 
         # Plot the output comparison (right subplot)
         axs[0, 1].plot(trunk_query_locs_cpu, operator_output_true_np.squeeze(), 'g-', linewidth=2, label='True')
         axs[0, 1].plot(trunk_query_locs_cpu, operator_output_pred, 'r--', linewidth=2, label=f'{model_name_str} Prediction')
         axs[0, 1].set_xlabel('$x$')
         axs[0, 1].set_ylabel(plot_ylabel_right)
-        axs[0, 1].set_title(plot_title_right)
+        # NO TITLE: axs[0, 1].set_title(plot_title_right)
         axs[0, 1].grid(True, alpha=0.3)
         axs[0, 1].legend()
 
@@ -220,6 +195,16 @@ def plot_operator_comparison(
         plt.savefig(save_path)
         print(f"Saved {task_type_str} plot for sample {i+1} to {save_path}")
         plt.close(fig)
+
+    # Reset font parameters to default to avoid affecting other plots
+    plt.rcParams.update({
+        'font.size': 10,
+        'axes.labelsize': 10,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        'legend.fontsize': 10,
+        'axes.titlesize': 12
+    })
 
 def plot_trunk_basis_functions(model, x_basis, p_dim, log_dir, model_name="SetONet"):
     """
@@ -259,16 +244,16 @@ def plot_trunk_basis_functions(model, x_basis, p_dim, log_dir, model_name="SetON
         num_to_plot = min(p_dim, actual_p_dim) if p_dim else actual_p_dim
         
         for i in range(num_to_plot):
-            ax.plot(x_basis_cpu, basis_output[:, i], label=f"Basis {i+1}", alpha=0.8)
+            ax.plot(x_basis_cpu, basis_output[:, i], label=f"Basis {i+1}", alpha=0.8)  # type: ignore
         
-        ax.set_xlabel("Input coordinate")
-        ax.set_ylabel("Trunk Output Value")
-        ax.set_title(f"{model_name} Trunk Basis Functions (showing {num_to_plot}/{actual_p_dim})")
-        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.set_xlabel("Input coordinate")  # type: ignore
+        ax.set_ylabel("Trunk Output Value")  # type: ignore
+        ax.set_title(f"{model_name} Trunk Basis Functions (showing {num_to_plot}/{actual_p_dim})")  # type: ignore
+        ax.grid(True, linestyle='--', alpha=0.7)  # type: ignore
         
         # Only show legend if not too many basis functions
         if num_to_plot <= 10:
-            ax.legend(loc='best')
+            ax.legend(loc='best')  # type: ignore
         
         plt.tight_layout()
         plot_filename = os.path.join(log_dir, f"{model_name.lower()}_trunk_basis_plot.png")
@@ -373,6 +358,16 @@ def plot_darcy_comparison(
     # Convert query locations to CPU for plotting
     query_x_cpu = query_x.cpu().squeeze()
 
+    # Set larger font sizes for better readability
+    plt.rcParams.update({
+        'font.size': 14,          # Default text size
+        'axes.labelsize': 16,     # X and Y labels
+        'xtick.labelsize': 16,    # X axis tick labels
+        'ytick.labelsize': 16,    # Y axis tick labels
+        'legend.fontsize': 16,    # Legend text (line labels)
+        'axes.titlesize': 18      # Title text (not used but set for consistency)
+    })
+
     for plot_idx, sample_idx in enumerate(sample_indices):
         fig, axs = plt.subplots(1, 2, figsize=(14, 6), squeeze=False)
 
@@ -414,51 +409,15 @@ def plot_darcy_comparison(
             u_at_sensors_model = u_at_sensors_true
             actual_n_sensors = len(sensor_x_plot)
 
-        # Plot input source term u(x) with sensor points (left subplot)
+        # Plot input source term u(x) - NO SENSOR POINTS (left subplot)
         axs[0, 0].plot(x_grid.cpu(), u_full.cpu(), 'b-', linewidth=2, label='Input Source Term $u(x)$')
-        
-        # Plot specified fraction of sensor points for visualization
-        if replace_with_nearest and sensor_dropoff > 0:
-            # For nearest neighbor replacement, plot based on unique sensors only
-            unique_sensor_locs, unique_indices = torch.unique(sensor_x_plot, dim=0, return_inverse=True)
-            unique_sensor_values = []
-            
-            # Get values corresponding to unique locations
-            for j, unique_loc in enumerate(unique_sensor_locs):
-                # Find first occurrence of this unique location
-                first_idx = (sensor_x_plot == unique_loc.unsqueeze(0)).all(dim=1).nonzero()[0].item()
-                unique_sensor_values.append(u_at_sensors_plot[first_idx])
-            
-            unique_sensor_values = np.array(unique_sensor_values)
-            
-            # Plot specified fraction of unique sensors
-            n_to_plot = max(1, int(len(unique_sensor_locs) * sensors_to_plot_fraction))
-            step_size = max(1, len(unique_sensor_locs) // n_to_plot)
-            sensor_indices_plot = range(0, len(unique_sensor_locs), step_size)
-            sensor_x_subset = unique_sensor_locs[sensor_indices_plot]
-            sensor_y_subset = unique_sensor_values[sensor_indices_plot]
-            
-            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
-                             c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Sensors ({len(sensor_x_subset)}/{len(unique_sensor_locs)} unique)')
-        else:
-            # Normal case: plot specified fraction of sensors
-            n_to_plot = max(1, int(len(sensor_x_plot) * sensors_to_plot_fraction))
-            step_size = max(1, len(sensor_x_plot) // n_to_plot)
-            sensor_indices_plot = range(0, len(sensor_x_plot), step_size)
-            sensor_x_subset = sensor_x_plot[sensor_indices_plot]
-            sensor_y_subset = u_at_sensors_plot[sensor_indices_plot]
-            
-            axs[0, 0].scatter(sensor_x_subset.squeeze(), sensor_y_subset.squeeze(), 
-                             c='red', s=50, zorder=5, alpha=0.8, 
-                             label=f'Sensors ({len(sensor_x_subset)}/{len(sensor_x_plot)})')
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel('$u(x)$')
         
-        # Create title with sample info
-        title_suffix = f"(Sample {sample_idx})"
-        axs[0, 0].set_title(f'Input Source Term $u(x)$ {title_suffix}')
+        # NO TITLE: Create title with sample info
+        # title_suffix = f"(Sample {sample_idx})"
+        # axs[0, 0].set_title(f'Input Source Term $u(x)$ {title_suffix}')
         axs[0, 0].grid(True, alpha=0.3)
         axs[0, 0].legend()
 
@@ -467,27 +426,30 @@ def plot_darcy_comparison(
             # Prepare inputs for the model
             query_x_model = query_x.clone().to(device)
 
-            # Use prepare_setonet_inputs for consistency
-            from Models.utils.helper_utils import prepare_setonet_inputs
-            
-            xs, us, ys = prepare_setonet_inputs(
-                sensor_x_model,
-                1,  # batch_size = 1 for single sample
-                u_at_sensors_model.unsqueeze(-1),  # Add feature dimension
-                query_x_model,
-                actual_n_sensors
-            )
+            if hasattr(model_to_use, 'forward_branch'):  # SetONet
+                xs, us, ys = prepare_setonet_inputs(
+                    sensor_x_model,
+                    1,  # batch_size = 1 for single sample
+                    u_at_sensors_model.unsqueeze(-1),  # Add feature dimension
+                    query_x_model,
+                    actual_n_sensors
+                )
 
-            # Get model prediction
-            s_at_queries_pred = model_to_use(xs, us, ys)
-            s_at_queries_pred = s_at_queries_pred.squeeze().cpu().numpy()
+                # Get model prediction
+                s_at_queries_pred = model_to_use(xs, us, ys)
+                s_at_queries_pred = s_at_queries_pred.squeeze().cpu().numpy()
+            else:  # DeepONet
+                branch_input = u_at_sensors_model.unsqueeze(0)  # [1, actual_n_sensors]
+                trunk_input = query_x_model.unsqueeze(0)  # [1, n_queries, 1]
+                dummy_xs = sensor_x_model.unsqueeze(0)  # [1, actual_n_sensors, 1] (ignored)
+                s_at_queries_pred = model_to_use(dummy_xs, branch_input.unsqueeze(-1), trunk_input).squeeze().cpu().numpy()
 
         # Plot true vs predicted solution s(x) (right subplot)
         axs[0, 1].plot(query_x_cpu, s_at_queries_true.cpu().numpy(), 'g-', linewidth=2, label='True')
         axs[0, 1].plot(query_x_cpu, s_at_queries_pred, 'r--', linewidth=2, label='SetONet Prediction')
         axs[0, 1].set_xlabel('$x$')
         axs[0, 1].set_ylabel('$s(x)$')
-        axs[0, 1].set_title(f'Output: True vs Predicted $s(x)$ {title_suffix}')
+        # NO TITLE: axs[0, 1].set_title(f'Output: True vs Predicted $s(x)$ {title_suffix}')
         axs[0, 1].grid(True, alpha=0.3)
         axs[0, 1].legend()
 
@@ -499,4 +461,14 @@ def plot_darcy_comparison(
         save_path = os.path.join(log_dir, f"{plot_filename_prefix}_{dataset_split}_sample_{sample_idx}_plot_{plot_idx+1}{dropoff_suffix}.png")
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved Darcy 1D {dataset_split} plot for sample {sample_idx} (plot {plot_idx+1}) to {save_path}")
-        plt.close(fig) 
+        plt.close(fig)
+
+    # Reset font parameters to default to avoid affecting other plots
+    plt.rcParams.update({
+        'font.size': 10,
+        'axes.labelsize': 10,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        'legend.fontsize': 10,
+        'axes.titlesize': 12
+    }) 

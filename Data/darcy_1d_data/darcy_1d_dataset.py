@@ -23,63 +23,16 @@ def load_darcy_dataset(data_path):
         print(f"Error loading dataset from {data_path}: {e}")
         raise
 
-def interpolate_sensor_values(u_data, grid_points, sensor_locations, device):
-    """
-    Efficiently interpolate sensor values at arbitrary continuous locations using linear interpolation.
-    
-    Args:
-        u_data: [n_samples, n_grid] - Function values on the grid
-        grid_points: [n_grid] - Grid point locations (assumed to be sorted)
-        sensor_locations: [n_sensors] - Arbitrary sensor locations to interpolate at
-        device: PyTorch device
-        
-    Returns:
-        u_interpolated: [n_samples, n_sensors] - Interpolated values at sensor locations
-    """
-    # Ensure all tensors are on the same device
-    grid_points = grid_points.to(device)
-    sensor_locations = sensor_locations.to(device)
-    u_data = u_data.to(device)
-    
-    # Use torch.searchsorted to find interpolation indices efficiently
-    # This finds the right insertion point for each sensor location in the sorted grid
-    indices = torch.searchsorted(grid_points, sensor_locations, right=False)
-    
-    # Clamp indices to valid range [1, n_grid-1] to avoid boundary issues
-    n_grid = len(grid_points)
-    indices = torch.clamp(indices, 1, n_grid - 1)
-    
-    # Get left and right grid points for interpolation
-    left_indices = indices - 1  # [n_sensors]
-    right_indices = indices     # [n_sensors]
-    
-    # Get grid coordinates for interpolation
-    x_left = grid_points[left_indices]   # [n_sensors]
-    x_right = grid_points[right_indices] # [n_sensors]
-    
-    # Compute interpolation weights
-    # weight = (sensor_loc - x_left) / (x_right - x_left)
-    dx = x_right - x_left
-    # Handle potential division by zero (though shouldn't happen with proper grid)
-    dx = torch.where(dx > 1e-10, dx, torch.ones_like(dx))
-    weights = (sensor_locations - x_left) / dx  # [n_sensors]
-    
-    # Get function values at left and right grid points
-    # u_data: [n_samples, n_grid], left_indices: [n_sensors]
-    # Result: [n_samples, n_sensors]
-    u_left = u_data[:, left_indices]   # [n_samples, n_sensors]
-    u_right = u_data[:, right_indices] # [n_samples, n_sensors]
-    
-    # Linear interpolation: u_interp = u_left + weight * (u_right - u_left)
-    u_interpolated = u_left + weights.unsqueeze(0) * (u_right - u_left)
-    
-    return u_interpolated
-
 class DarcyDataGenerator:
-    """OPTIMIZED Data generator for Darcy 1D dataset with support for variable sensors."""
+    """Dataset wrapper for Darcy 1D data that's compatible with SetONet training loop."""
     
     def __init__(self, dataset, sensor_indices, query_indices, device, params, grid_points):
         print("📊 Pre-loading and optimizing dataset...")
+        
+        # Store basic info
+        self.device = device
+        self.params = params
+        self.batch_size = params['batch_size_train']
         
         # PRE-LOAD all data to GPU for maximum efficiency
         train_data = dataset['train']
@@ -96,12 +49,17 @@ class DarcyDataGenerator:
             self.s_data[i] = torch.tensor(train_data[i]['s'], device=device, dtype=torch.float32)
         
         self.query_indices = query_indices.to(device)
-        self.device = device
         self.n_train = n_train
-        self.params = params
         self.grid_points = grid_points.to(device)
         self.n_grid = n_grid
-        self.input_range = params.get('input_range', [0, 1])  # Domain range for continuous sampling
+        
+        # Store query points for TensorBoard callback compatibility
+        self.query_x = self.grid_points[self.query_indices].view(-1, 1)
+        
+        # Dataset structure info (like elastic dataset)
+        self.n_force_points = len(sensor_indices)  # Number of sensor points
+        self.n_mesh_points = len(query_indices)    # Number of query points
+        self.input_dim = 1  # 1D coordinates
         
         # Pre-extract query data (always fixed)
         self.s_queries = self.s_data[:, self.query_indices]   # [n_train, n_queries]
@@ -118,11 +76,11 @@ class DarcyDataGenerator:
         if self.train_sensor_dropoff > 0.0:
             replacement_mode = "nearest replacement" if self.replace_with_nearest else "removal"
             print(f"⚠️ Training with {self.train_sensor_dropoff:.1%} sensor dropout ({replacement_mode})")
-        
-    def generate_batch(self, batch_size):
-        """OPTIMIZED: Generate a batch using pre-loaded GPU data."""
+    
+    def sample(self, device=None):
+        """Sample a batch using pre-loaded GPU tensors (compatible with SetONet training loop)."""
         # Random sampling directly on GPU (much faster)
-        indices = torch.randint(0, self.n_train, (batch_size,), device=self.device)
+        indices = torch.randint(0, self.n_train, (self.batch_size,), device=self.device)
         
         # Fixed sensors: use pre-extracted sensor data
         u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
@@ -131,22 +89,56 @@ class DarcyDataGenerator:
         # Query data is always the same
         s_at_queries = self.s_queries[indices]  # [batch_size, n_queries]
         
+        # Prepare data in SetONet format
+        xs = batch_sensor_x.unsqueeze(0).expand(self.batch_size, -1, -1)  # [batch_size, n_sensors, 1]
+        us = u_at_sensors.unsqueeze(-1)  # [batch_size, n_sensors, 1]
+        ys = self.grid_points[self.query_indices].view(-1, 1).unsqueeze(0).expand(self.batch_size, -1, -1)  # [batch_size, n_queries, 1]
+        G_u_ys = s_at_queries.unsqueeze(-1)  # [batch_size, n_queries, 1]
+        
+        # Apply sensor dropout during training if specified
         if self.train_sensor_dropoff > 0.0:
-            sensor_x_batch_list = []
-            u_at_sensors_batch_list = []
+            xs_dropped_list = []
+            us_dropped_list = []
             
-            for sample_idx in range(batch_size):
-                sensor_x_dropped, u_at_sensors_dropped = apply_sensor_dropoff(
-                    batch_sensor_x,
-                    u_at_sensors[sample_idx],
-                    self.train_sensor_dropoff,
+            # Apply sensor dropout to each sample in the batch
+            for i in range(self.batch_size):
+                # Remove batch dimension for dropout function
+                xs_single = xs[i]  # Shape: (n_sensors, 1)
+                us_single = us[i].squeeze(-1)  # Shape: (n_sensors,)
+                
+                # Apply sensor dropout
+                xs_dropped, us_dropped = apply_sensor_dropoff(
+                    xs_single, 
+                    us_single, 
+                    self.train_sensor_dropoff, 
                     self.replace_with_nearest
                 )
-                sensor_x_batch_list.append(sensor_x_dropped)
-                u_at_sensors_batch_list.append(u_at_sensors_dropped)
+                
+                xs_dropped_list.append(xs_dropped)
+                us_dropped_list.append(us_dropped)
             
-            batch_sensor_x = sensor_x_batch_list[0]
-            u_at_sensors = torch.stack(u_at_sensors_batch_list, dim=0)
+            # Stack the results back into batches
+            xs = torch.stack(xs_dropped_list, dim=0)
+            us = torch.stack(us_dropped_list, dim=0).unsqueeze(-1)
+        
+        return xs, us, ys, G_u_ys, None
+    
+    def generate_batch(self, batch_size):
+        """Legacy method for backward compatibility."""
+        # Temporarily override batch size for this call
+        original_batch_size = self.batch_size
+        self.batch_size = batch_size
+        
+        # Use the sample method and extract the raw data
+        xs, us, ys, G_u_ys, _ = self.sample()
+        
+        # Restore original batch size
+        self.batch_size = original_batch_size
+        
+        # Convert back to the original format
+        u_at_sensors = us.squeeze(-1)  # [batch_size, n_sensors]
+        s_at_queries = G_u_ys.squeeze(-1)  # [batch_size, n_queries]
+        batch_sensor_x = xs[0]  # [n_sensors, 1] - same for all samples
         
         return u_at_sensors, s_at_queries, batch_sensor_x
 

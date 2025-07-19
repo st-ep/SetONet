@@ -12,10 +12,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_pa
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from Models.SetONet import SetONet
+from Models.deeponet_model import DeepONetWrapper
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.don_config_utils import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.darcy_1d_data.darcy_1d_dataset import (
     load_darcy_dataset, DarcyDataGenerator, create_sensor_points, 
@@ -24,7 +24,7 @@ from Data.darcy_1d_data.darcy_1d_dataset import (
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train SetONet for Darcy 1D equation.")
+    parser = argparse.ArgumentParser(description="Train DeepONet for Darcy 1D equation.")
     
     # Data parameters
     parser.add_argument('--data_path', type=str, default="Data/darcy_1d_data/darcy_1d_dataset_501", 
@@ -32,22 +32,18 @@ def parse_arguments():
     parser.add_argument('--sensor_size', type=int, default=301, help='Number of sensor locations (max 501 for Darcy 1D grid)')
     
     # Model architecture
-    parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
-    parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
-    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
-    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
-    parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
-    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
+    parser.add_argument('--don_p_dim', type=int, default=32, help='Latent dimension p for DeepONet')
+    parser.add_argument('--don_phi_hidden', type=int, default=256, help='Hidden size for DeepONet phi network')
+    parser.add_argument('--don_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
+    parser.add_argument('--don_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
+    parser.add_argument('--don_branch_hidden', type=int, default=128, help='Hidden size for DeepONet branch network')
+    parser.add_argument('--don_n_branch_layers', type=int, default=3, help='Number of layers in DeepONet branch network')
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for DeepONet networks')
     
     # Training parameters
-    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
+    parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
-    parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency for sinusoidal positional encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
@@ -59,7 +55,7 @@ def parse_arguments():
     parser.add_argument('--n_query_points', type=int, default=301, help='Number of query points for evaluation')
     
     # Model loading and misc
-    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
     
     # TensorBoard logging
@@ -72,7 +68,7 @@ def parse_arguments():
 def setup_logging():
     """Setup logging directory."""
     logs_base_in_project = os.path.join("logs")
-    model_folder_name = "SetONet_darcy_1d"
+    model_folder_name = "DeepONet_darcy_1d"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
@@ -89,45 +85,35 @@ def get_activation_function(activation_name):
     }
     return activation_map.get(activation_name.lower(), nn.ReLU)
 
-def create_setonet_model(args, device):
-    """Create SetONet model for Darcy 1D problem."""
-    print(f"\n--- Initializing SetONet Model for {args.benchmark} ---")
+def create_deeponet_model(args, device):
+    """Create DeepONet model for Darcy 1D problem."""
+    print(f"\n--- Initializing DeepONet Model for {args.benchmark} ---")
     print(f"Using activation function: {args.activation_fn}")
     
     activation_fn = get_activation_function(args.activation_fn)
     
-    model = SetONet(
-        input_size_src=1,  # 1D coordinates (x)
-        output_size_src=1,  # Scalar force values
-        input_size_tgt=1,  # 1D coordinates (x)
-        output_size_tgt=1,  # Scalar displacement values
-        p=args.son_p_dim,
-        phi_hidden_size=args.son_phi_hidden,
-        rho_hidden_size=args.son_rho_hidden,
-        trunk_hidden_size=args.son_trunk_hidden,
-        n_trunk_layers=args.son_n_trunk_layers,
+    model = DeepONetWrapper(
+        branch_input_dim=args.sensor_size,  # Fixed number of sensors
+        p=args.don_p_dim,
+        phi_hidden_size=args.don_phi_hidden,
+        trunk_hidden_size=args.don_trunk_hidden,
+        n_trunk_layers=args.don_n_trunk_layers,
+        branch_hidden_size=args.don_branch_hidden,
+        n_branch_layers=args.don_n_branch_layers,
         activation_fn=activation_fn,
-        use_deeponet_bias=True,
-        phi_output_size=args.son_phi_output_size,
-        initial_lr=args.son_lr,
+        initial_lr=args.don_lr,
         lr_schedule_steps=args.lr_schedule_steps,
         lr_schedule_gammas=args.lr_schedule_gammas,
-        pos_encoding_type=args.pos_encoding_type,
-        pos_encoding_dim=args.pos_encoding_dim,
-        pos_encoding_max_freq=args.pos_encoding_max_freq,
-        aggregation_type=args.son_aggregation,
-        use_positional_encoding=(args.pos_encoding_type != 'skip'),
-        attention_n_tokens=1,
     ).to(device)
     
     return model
 
-def load_pretrained_model(setonet_model, args, device):
+def load_pretrained_model(model, args, device):
     """Load a pre-trained model if path is provided."""
     if args.load_model_path:
         if os.path.exists(args.load_model_path):
-            setonet_model.load_state_dict(torch.load(args.load_model_path, map_location=device))
-            print(f"Loaded pre-trained SetONet model from: {args.load_model_path}")
+            model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            print(f"Loaded pre-trained DeepONet model from: {args.load_model_path}")
             return True
         else:
             print(f"Warning: Model path not found: {args.load_model_path}")
@@ -166,10 +152,10 @@ def main():
     print(f"Sensor points: {len(sensor_x)}, Query points: {len(query_x)}")
     
     # Create model
-    setonet_model = create_setonet_model(args, device)
+    deeponet_model = create_deeponet_model(args, device)
     
     # Load pre-trained model if specified
-    model_was_loaded = load_pretrained_model(setonet_model, args, device)
+    model_was_loaded = load_pretrained_model(deeponet_model, args, device)
     
     # Create data generator
     data_generator = DarcyDataGenerator(dataset, sensor_indices, query_indices, device, params, grid_points)
@@ -192,21 +178,21 @@ def main():
     
     # Training
     if not model_was_loaded:
-        print(f"\nStarting training for {args.son_epochs} epochs...")
-        setonet_model.train_model(
+        print(f"\nStarting training for {args.don_epochs} epochs...")
+        deeponet_model.train_model(
             dataset=data_generator,
-            epochs=args.son_epochs,
+            epochs=args.don_epochs,
             progress_bar=True,
             callback=callback
         )
     else:
-        print(f"\nSetONet Darcy 1D model loaded. Skipping training.")
+        print(f"\nDeepONet Darcy 1D model loaded. Skipping training.")
     
     # Evaluate model
     print("\nEvaluating model...")
     from Data.data_utils import apply_sensor_dropoff
     
-    setonet_model.eval()
+    deeponet_model.eval()
     test_data = dataset['test']
     n_test = min(100, len(test_data))
     total_loss = 0.0
@@ -231,7 +217,7 @@ def main():
             else:
                 sensor_x_used = sensor_x.unsqueeze(0)
             
-            pred = setonet_model(sensor_x_used, xs_data, ys_data)
+            pred = deeponet_model(sensor_x_used, xs_data, ys_data)
             
             mse_loss = torch.nn.MSELoss()(pred, target)
             total_loss += mse_loss.item()
@@ -258,7 +244,7 @@ def main():
     for i in range(3):
         plot_save_path = os.path.join(log_dir, f"darcy_results_test_sample_{i}.png")
         plot_darcy_comparison(
-            model_to_use=setonet_model, dataset=dataset, sensor_x=sensor_x, query_x=query_x,
+            model_to_use=deeponet_model, dataset=dataset, sensor_x=sensor_x, query_x=query_x,
             sensor_indices=sensor_indices, query_indices=query_indices, log_dir=log_dir,
             num_samples_to_plot=1, plot_filename_prefix=f"darcy_1d_test_{i}",
             sensor_dropoff=args.eval_sensor_dropoff, replace_with_nearest=args.replace_with_nearest,
@@ -268,12 +254,12 @@ def main():
     
     # Save model
     if not model_was_loaded:
-        model_save_path = os.path.join(log_dir, "darcy1d_setonet_model.pth")
-        torch.save(setonet_model.state_dict(), model_save_path)
-        print(f"Model saved to: {model_save_path}")
+        model_save_path = os.path.join(log_dir, "darcy1d_deeponet_model.pth")
+        torch.save(deeponet_model.state_dict(), model_save_path)
+        print(f"DeepONet model saved to: {model_save_path}")
     
     # Save experiment configuration with test results
-    save_experiment_configuration(args, setonet_model, dataset, dataset_wrapper=data_generator, device=device, log_dir=log_dir, dataset_type="darcy_1d", test_results=test_results)
+    save_experiment_configuration(args, deeponet_model, dataset, dataset_wrapper=data_generator, device=device, log_dir=log_dir, dataset_type="darcy_1d", test_results=test_results)
     
     print("Training completed!")
 

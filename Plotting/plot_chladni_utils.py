@@ -3,8 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.ticker import FormatStrFormatter
+from matplotlib.axes import Axes
 
-def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, save_path=None, eval_sensor_dropoff=0.0, replace_with_nearest=False):
+def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, save_path=None, eval_sensor_dropoff=0.0, replace_with_nearest=False) -> plt.Figure:
     """Plot input forces, predicted displacements, and ground truth for Chladni plate."""
     model.eval()
     test_data = dataset['test']
@@ -47,10 +48,16 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
         replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
         dropout_info = f" (Dropout: {eval_sensor_dropoff:.1%}, {n_sensors_remaining}/{n_sensors_orig} sensors, {replacement_mode})"
     
-    # Get prediction and denormalize
+    # Forward pass
+    model.eval()
     with torch.no_grad():
-        pred_norm = model(xs_used, us_used, ys)
-        pred_orig = chladni_dataset.denormalize_displacement(pred_norm.squeeze(-1))
+        if hasattr(model, 'forward_branch'):  # SetONet
+            pred_norm = model(xs_used, us_used, ys)
+        else:  # DeepONet
+            pred_norm = model(xs_used, us_used, ys)  # xs_used is dummy, ignored by DeepONet
+    
+    # Get prediction and denormalize
+    pred_orig = chladni_dataset.denormalize_displacement(pred_norm.squeeze(-1))
     
     # Use original data if available, otherwise denormalize
     if 'u_orig' in sample:
@@ -141,7 +148,6 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
     
     # Input forces
     im1 = axes[0].contourf(x_coords, y_coords, forces_scaled, levels=20, cmap='Spectral_r')
-    axes[0].set_title('Input Forces', fontsize=18, pad=20)
     axes[0].set_xlabel('X (m)', fontsize=16)
     axes[0].set_ylabel('Y (m)', fontsize=16)
     axes[0].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
@@ -156,7 +162,6 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
     im2 = axes[1].contourf(x_coords, y_coords, pred_scaled, levels=20, cmap='RdBu_r', vmin=vmin_scaled, vmax=vmax_scaled)
     # Add zero displacement contour lines (Chladni nodal lines)
     axes[1].contour(x_coords, y_coords, pred_scaled, levels=[0], colors='gold', linewidths=2, alpha=1.0, linestyles='-')
-    axes[1].set_title('Prediction', fontsize=18, pad=20)
     axes[1].set_xlabel('X (m)', fontsize=16)
     axes[1].set_ylabel('Y (m)', fontsize=16)
     axes[1].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
@@ -168,7 +173,6 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
     im3 = axes[2].contourf(x_coords, y_coords, target_scaled, levels=20, cmap='RdBu_r', vmin=vmin_scaled, vmax=vmax_scaled)
     # Add zero displacement contour lines (Chladni nodal lines)
     axes[2].contour(x_coords, y_coords, target_scaled, levels=[0], colors='gold', linewidths=2, alpha=1.0, linestyles='-')
-    axes[2].set_title('Ground Truth', fontsize=18, pad=20)
     axes[2].set_xlabel('X (m)', fontsize=16)
     axes[2].set_ylabel('Y (m)', fontsize=16)
     axes[2].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
@@ -181,7 +185,6 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
     
     # Absolute error (with its own colorbar)
     im4 = axes[3].contourf(x_coords, y_coords, error_scaled, levels=20, cmap='coolwarm')
-    axes[3].set_title('Absolute Error', fontsize=18, pad=20)
     axes[3].set_xlabel('X (m)', fontsize=16)
     axes[3].set_ylabel('Y (m)', fontsize=16)
     axes[3].set_aspect('equal', adjustable='box')  # Ensure square aspect ratio
