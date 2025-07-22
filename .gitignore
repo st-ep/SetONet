@@ -117,6 +117,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.set_env/
 
 # Spyder project settings
 .spyderproject
@@ -182,4 +183,39 @@ logs/
 # Specific to your project if you generate other files you don't want to track
 # e.g., if you had data files you didn't want to commit:
 # data/raw_data/
-# data/processed_data/ 
+# data/processed_data/
+
+# Additional ML/Scientific computing ignores
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+
+# Jupyter Notebook outputs
+*_output/
+outputs/
+
+# HuggingFace datasets cache
+.cache/
+**/cache/
+
+# Weights & Biases
+wandb/
+
+# MLflow
+mlruns/
+
+# DVC
+.dvc/
+*.dvc
+
+# Large data files (if you want to track them with Git LFS instead)
+# *.zip
+# *.tar.gz
+# *.csv (uncomment if you have large CSV files)
+
+# Generated plots and results
+plots/
+results/
+figures/

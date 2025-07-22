@@ -53,6 +53,8 @@ def create_setonet_model(args, device):
         use_deeponet_bias=True,
         phi_output_size=args.son_phi_output_size,
         pos_encoding_type=args.pos_encoding_type,
+        pos_encoding_dim=args.pos_encoding_dim,
+        pos_encoding_max_freq=args.pos_encoding_max_freq,
         aggregation_type=args.son_aggregation,
     )
 

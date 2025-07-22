@@ -4,10 +4,11 @@ import sys
 import os 
 from datetime import datetime 
 import argparse
+import json
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
-project_root = os.path.dirname(os.path.dirname(current_script_path))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -15,16 +16,18 @@ if project_root not in sys.path:
 from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
+from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.tensorboard_callback import TensorBoardCallback
 from Plotting.plot_chladni_utils import plot_chladni_results
-from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset
+from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset, ChladniDataset
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train SetONet for Chladni plate problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/chladni_data/chladni_dataset", 
-                       help='Path to Chladni dataset')
+    parser.add_argument('--data_path', type=str, default=None, 
+                       help='Path to Chladni dataset (if None, uses Data/chladni_data/chladni_dataset relative to project root)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=128, help='Latent dimension p for SetONet')
@@ -38,7 +41,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
+    parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
@@ -52,6 +55,15 @@ def parse_arguments():
     # Evaluation robustness testing (sensor failures)
     parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
     parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
+    
+    # GPU selection
+    parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use (0, 1, etc.). If not specified, uses CUDA_VISIBLE_DEVICES or auto-detects')
+    
+    # TensorBoard logging
+    parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging of training metrics')
+    parser.add_argument('--tb_eval_frequency', type=int, default=1000, help='How often to evaluate on test set for TensorBoard logging (in steps)')
+    parser.add_argument('--tb_test_samples', type=int, default=100, help='Number of test samples to use for TensorBoard evaluation')
     
     return parser.parse_args()
 
@@ -188,18 +200,37 @@ def main():
     if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
         raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
     
+    if not 0.0 <= args.train_sensor_dropoff <= 1.0:
+        raise ValueError("--train_sensor_dropoff must be between 0.0 and 1.0")
+
+    if args.train_sensor_dropoff > 0.0:
+        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
+        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} ({replacement_mode})")
+        print("(This makes the model more robust to sensor failures)")
+    
+    # Setup data path
+    if args.data_path is None:
+        args.data_path = os.path.join(project_root, "Data", "chladni_data", "chladni_dataset")
+    
     # Setup logging
     log_dir = setup_logging(project_root)
     
     # Load dataset using the new function
-    dataset, chladni_dataset = load_chladni_dataset(
+    dataset, _ = load_chladni_dataset(
         data_path=args.data_path,
         batch_size=args.batch_size,
-        device=device
+        device=str(device)  # Convert device to string
     )
     
-    if dataset is None or chladni_dataset is None:
+    if dataset is None:
         return
+    
+    # Create dataset wrapper with corresponding normalization stats path
+    normalization_stats_path = os.path.join(os.path.dirname(args.data_path), 'chladni_normalization_stats.json')
+    chladni_dataset = ChladniDataset(dataset, batch_size=args.batch_size, device=str(device), 
+                                   normalization_stats_path=normalization_stats_path,
+                                   train_sensor_dropoff=args.train_sensor_dropoff,
+                                   replace_with_nearest=args.replace_with_nearest)
     
     # Create model
     print("Creating SetONet model...")
@@ -214,6 +245,24 @@ def main():
         print(f"Loading pre-trained model from: {args.load_model_path}")
         model.load_state_dict(torch.load(args.load_model_path, map_location=device))
     
+    # Setup TensorBoard callback if enabled
+    callback = None
+    if args.enable_tensorboard:
+        print("Setting up TensorBoard logging...")
+        tb_log_dir = os.path.join(log_dir, "tensorboard")
+        callback = TensorBoardCallback(
+            log_dir=tb_log_dir,
+            dataset=dataset,
+            dataset_wrapper=chladni_dataset,
+            device=device,
+            eval_frequency=args.tb_eval_frequency,
+            n_test_samples=args.tb_test_samples,
+            eval_sensor_dropoff=args.eval_sensor_dropoff,
+            replace_with_nearest=args.replace_with_nearest
+        )
+        print(f"TensorBoard logs will be saved to: {tb_log_dir}")
+        print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
+    
     # Train model
     print(f"\nStarting training for {args.son_epochs} epochs...")
     
@@ -221,14 +270,21 @@ def main():
         dataset=chladni_dataset,
         epochs=args.son_epochs,
         progress_bar=True,
-        callback=None
+        callback=callback
     )
     
     # Evaluate model
     print("\nEvaluating model...")
-    evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
-                   eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                   replace_with_nearest=args.replace_with_nearest)
+    avg_loss, avg_rel_error = evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
+                                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
+                                            replace_with_nearest=args.replace_with_nearest)
+    
+    # Prepare test results for configuration saving
+    test_results = {
+        "relative_l2_error": avg_rel_error,
+        "mse_loss": avg_loss,
+        "n_test_samples": 100
+    }
     
     # Plot results
     print("Generating plots...")
@@ -237,6 +293,9 @@ def main():
         plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=i, save_path=plot_save_path,
                             eval_sensor_dropoff=args.eval_sensor_dropoff, 
                             replace_with_nearest=args.replace_with_nearest)
+    
+    # Save experiment configuration with test results
+    save_experiment_configuration(args, model, dataset, chladni_dataset, device, log_dir, dataset_type="chladni_2d", test_results=test_results)
     
     # Save model
     model_save_path = os.path.join(log_dir, "chladni_setonet_model.pth")

@@ -13,17 +13,17 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import required modules
-from Models.SetONet import SetONet
+from Models.deeponet_model import DeepONetWrapper
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.don_config_utils import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Plotting.plot_elastic_2d_utils import plot_elastic_results
 from Data.elastic_2d_data.elastic_2d_dataset import load_elastic_dataset
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train SetONet for Elastic 2D plate problem.")
+    parser = argparse.ArgumentParser(description="Train DeepONet for Elastic 2D plate problem.")
     
     # Data parameters
     # Default path relative to project root
@@ -32,27 +32,26 @@ def parse_arguments():
                        help='Path to Elastic 2D dataset')
     
     # Model architecture
-    parser.add_argument('--son_p_dim', type=int, default=128, help='Latent dimension p for SetONet')
-    parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
-    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
-    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
-    parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
-    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
+    parser.add_argument('--don_p_dim', type=int, default=128, help='Latent dimension p for DeepONet')
+    parser.add_argument('--don_phi_hidden', type=int, default=256, help='Hidden size for DeepONet phi network')
+    parser.add_argument('--don_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
+    parser.add_argument('--don_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
+    parser.add_argument('--don_branch_hidden', type=int, default=128, help='Hidden size for DeepONet branch network')
+    parser.add_argument('--don_n_branch_layers', type=int, default=3, help='Number of layers in DeepONet branch network')
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for DeepONet networks')
     
     # Training parameters
-    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
+    parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
+    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for DeepONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
     parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency for sinusoidal positional encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Model loading
-    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     
     # Sensor dropout for training and evaluation
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
@@ -69,7 +68,7 @@ def parse_arguments():
 def setup_logging(project_root):
     """Setup logging directory."""
     logs_base_in_project = os.path.join(project_root, "logs")
-    model_folder_name = "SetONet_elastic2d"
+    model_folder_name = "DeepONet_elastic2d"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
@@ -86,32 +85,23 @@ def get_activation_function(activation_name):
     }
     return activation_map.get(activation_name.lower(), nn.ReLU)
 
-def create_model(args, device):
-    """Create SetONet model for Elastic 2D problem."""
+def create_model(args, device, branch_input_dim):
+    """Create DeepONet model for Elastic 2D problem."""
     activation_fn = get_activation_function(args.activation_fn)
     
-    model = SetONet(
-        input_size_src=2,  # 2D coordinates (x, y)
-        output_size_src=1,  # Scalar force values
-        input_size_tgt=2,  # 2D coordinates (x, y)
-        output_size_tgt=1,  # Scalar displacement values
-        p=args.son_p_dim,
-        phi_hidden_size=args.son_phi_hidden,
-        rho_hidden_size=args.son_rho_hidden,
-        trunk_hidden_size=args.son_trunk_hidden,
-        n_trunk_layers=args.son_n_trunk_layers,
+    model = DeepONetWrapper(
+        branch_input_dim=branch_input_dim,
+        trunk_input_dim=2,  # 2D coordinates
+        p=args.don_p_dim,
+        phi_hidden_size=args.don_phi_hidden,
+        trunk_hidden_size=args.don_trunk_hidden,
+        n_trunk_layers=args.don_n_trunk_layers,
+        branch_hidden_size=args.don_branch_hidden,
+        n_branch_layers=args.don_n_branch_layers,
         activation_fn=activation_fn,
-        use_deeponet_bias=True,
-        phi_output_size=args.son_phi_output_size,
-        initial_lr=args.son_lr,
+        initial_lr=args.don_lr,
         lr_schedule_steps=args.lr_schedule_steps,
         lr_schedule_gammas=args.lr_schedule_gammas,
-        pos_encoding_type=args.pos_encoding_type,  # Use the argument instead of hardcoded 'skip'
-        pos_encoding_dim=args.pos_encoding_dim,  # Add positional encoding dimension
-        pos_encoding_max_freq=args.pos_encoding_max_freq,  # Add max frequency parameter
-        aggregation_type=args.son_aggregation,
-        use_positional_encoding=(args.pos_encoding_type != 'skip'),  # Enable if not 'skip'
-        attention_n_tokens=1,
     ).to(device)
     
     return model
@@ -225,8 +215,8 @@ def main():
         return
     
     # Create model
-    print("Creating SetONet model...")
-    model = create_model(args, device)
+    print("Creating DeepONet model...")
+    model = create_model(args, device, elastic_dataset.n_force_points)
     
     # Print model info
     total_params = sum(p.numel() for p in model.parameters())
@@ -256,11 +246,11 @@ def main():
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
     
     # Train model
-    print(f"\nStarting training for {args.son_epochs} epochs...")
+    print(f"\nStarting training for {args.don_epochs} epochs...")
     
     model.train_model(
         dataset=elastic_dataset,
-        epochs=args.son_epochs,
+        epochs=args.don_epochs,
         progress_bar=True,
         callback=callback
     )
@@ -300,7 +290,7 @@ def main():
     save_experiment_configuration(args, model, dataset, elastic_dataset, device, log_dir, dataset_type="elastic_2d", test_results=test_results)
     
     # Save model
-    model_save_path = os.path.join(log_dir, "elastic2d_setonet_model.pth")
+    model_save_path = os.path.join(log_dir, "elastic2d_deeponet_model.pth")
     torch.save(model.state_dict(), model_save_path)
     print(f"Model saved to: {model_save_path}")
     print("Training completed!")

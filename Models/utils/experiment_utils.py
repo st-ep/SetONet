@@ -27,15 +27,11 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
         task_desc = "Forward: f(x) -> f'(x), Inverse: f'(x) -> f(x)"
     else:
         # New single benchmark mode
-        if benchmark == 'derivative':
-            description = "SetONet training for derivative operator learning"
-            task_desc = "Forward: f(x) -> f'(x)"
-        elif benchmark == 'integral':
-            description = "SetONet training for integral operator learning"
-            task_desc = "Forward: f'(x) -> f(x)"
-        else:
+        if 'son_phi_hidden' in dir(args):
             description = f"SetONet training for {benchmark} operator learning"
-            task_desc = f"Forward: {benchmark} operator"
+        else:
+            description = f"DeepONet training for {benchmark} operator learning"
+        task_desc = f"Forward: {benchmark} operator"
     
     # Count model parameters if model is provided
     model_info = {}
@@ -58,14 +54,16 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
         },
         "model_architecture": {
             "son_p_dim": args.son_p_dim,
-            "son_phi_hidden": args.son_phi_hidden,
-            "son_rho_hidden": args.son_rho_hidden,
+            "son_phi_hidden": getattr(args, 'son_phi_hidden', 'N/A'),
+            "son_rho_hidden": getattr(args, 'son_rho_hidden', 'N/A'),
             "son_trunk_hidden": args.son_trunk_hidden,
             "son_n_trunk_layers": args.son_n_trunk_layers,
-            "son_phi_output_size": args.son_phi_output_size,
-            "son_aggregation": args.son_aggregation,
-            "pos_encoding_type": args.pos_encoding_type,
-            "activation_function": "Tanh",
+            "son_phi_output_size": getattr(args, 'son_phi_output_size', 'N/A'),
+            "son_aggregation": getattr(args, 'son_aggregation', 'N/A'),
+            "pos_encoding_type": getattr(args, 'pos_encoding_type', 'N/A'),
+            "pos_encoding_dim": getattr(args, 'pos_encoding_dim', 'N/A'),
+            "pos_encoding_max_freq": getattr(args, 'pos_encoding_max_freq', 'N/A'),
+            "activation_function": args.activation_fn,
             "use_deeponet_bias": True,
             **model_info  # Add parameter counts
         },
@@ -148,11 +146,12 @@ def save_experiment_config(args, params, log_dir, device, model_was_loaded, eval
             }
         else:
             # Single benchmark mode
+            final_error = eval_result.get('final_l2_relative_error') if isinstance(eval_result, dict) else None
             config["performance_summary"] = {
-                "final_error": float(eval_result) if isinstance(eval_result, (float, int)) else None,
+                "final_error": float(final_error) if final_error is not None else None,
                 "benchmark": benchmark,
                 "training_completed": not model_was_loaded,
-                "error_level": "excellent" if isinstance(eval_result, (float, int)) and eval_result < 1e-4 else "good" if isinstance(eval_result, (float, int)) and eval_result < 1e-3 else "moderate" if isinstance(eval_result, (float, int)) and eval_result < 1e-2 else "poor"
+                "error_level": "excellent" if final_error is not None and final_error < 1e-4 else "good" if final_error is not None and final_error < 1e-3 else "moderate" if final_error is not None and final_error < 1e-2 else "poor"
             }
     
     # Save to JSON file

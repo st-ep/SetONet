@@ -74,7 +74,6 @@ def plot_displacement_field(coords, displacement, title, ax, colorbar_label='x-d
     ax.set_ylim(y_min, y_max)
     ax.set_xlabel('x', fontsize=16)
     ax.set_ylabel('y', fontsize=16)
-    ax.set_title(title, fontsize=18, pad=20)
     ax.tick_params(axis='both', which='major', labelsize=14)
 
 def plot_forcing_function(force_coords, force_values, title, ax):
@@ -91,7 +90,6 @@ def plot_forcing_function(force_coords, force_values, title, ax):
     ax.set_xlabel('Force value', fontsize=16)
     ax.set_ylabel('y', fontsize=16)
     ax.grid(True, alpha=0.3)
-    ax.set_title(title, fontsize=18, pad=20)
     ax.tick_params(axis='both', which='major', labelsize=14)
     
     # Invert x-axis so zero is at the right (force applied from right side)
@@ -151,7 +149,10 @@ def plot_elastic_results(model, dataset, elastic_dataset, device, sample_idx=0, 
     # Forward pass
     model.eval()
     with torch.no_grad():
-        pred_norm = model(xs_used, us_used, ys)
+        if hasattr(model, 'forward_branch'):  # SetONet
+            pred_norm = model(xs_used, us_used, ys)
+        else:  # DeepONet
+            pred_norm = model(xs_used, us_used, ys)  # xs_used is dummy, ignored by DeepONet
     
     # Convert to numpy and denormalize
     pred_orig = elastic_dataset.denormalize_displacement(pred_norm.squeeze(-1))

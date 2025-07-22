@@ -10,15 +10,22 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 from datasets import load_from_disk
 import json
+import os
+
+# Get paths relative to this file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
 
 def load_elastic_data():
     """Load the elastic dataset and normalization stats."""
     try:
         # Load dataset
-        dataset = load_from_disk('/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset')
+        dataset_path = os.path.join(current_dir, 'elastic_dataset')
+        dataset = load_from_disk(dataset_path)
         
         # Load normalization stats
-        with open('/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_normalization_stats.json', 'r') as f:
+        stats_path = os.path.join(current_dir, 'elastic_normalization_stats.json')
+        with open(stats_path, 'r') as f:
             stats = json.load(f)
         
         return dataset, stats
@@ -127,8 +134,7 @@ def plot_elastic_samples():
     test_indices = [0, 25, 75]     # 3 different test samples
     
     # Create plots directory if it doesn't exist
-    plots_dir = '/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/plots'
-    import os
+    plots_dir = os.path.join(current_dir, 'plots')
     os.makedirs(plots_dir, exist_ok=True)
     
     # Plot training samples

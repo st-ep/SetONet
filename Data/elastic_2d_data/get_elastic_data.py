@@ -17,6 +17,10 @@ import tqdm
 import time
 import json
 
+# Get paths relative to this file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+
 def normalize_data(data, axis=None):
     """
     Normalize data to zero mean and unit variance.
@@ -70,7 +74,7 @@ def generate_elastic_data():
     print("Starting elastic plate data processing...")
     
     # Download data if needed
-    data_path = "Data/elastic_2d_data/Dataset_1Circle.mat"
+    data_path = os.path.join(current_dir, "Dataset_1Circle.mat")
     if not os.path.exists(data_path):
         download_matlab_data(data_path)
     
@@ -184,17 +188,17 @@ def generate_elastic_data():
         'test': test_ds
     }
     
-    # Save dataset
-    dataset_path = "/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset"
+    # Save dataset using relative paths
+    dataset_path = os.path.join(current_dir, "elastic_dataset")
     os.makedirs(dataset_path, exist_ok=True)
     
     # Save dataset
     from datasets import DatasetDict
-    final_dataset = DatasetDict(final_ds)
+    final_dataset = DatasetDict({'train': train_ds, 'test': test_ds})
     final_dataset.save_to_disk(dataset_path)
     
     # Save normalization statistics
-    stats_path = '/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_normalization_stats.json'
+    stats_path = os.path.join(current_dir, 'elastic_normalization_stats.json')
     with open(stats_path, 'w') as f:
         json.dump(normalization_stats, f, indent=2)
     
@@ -203,7 +207,7 @@ def generate_elastic_data():
     print(f"Normalization stats saved to: {stats_path}")
     
     # Save original arrays for reference
-    original_path = '/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/ElasticData_original.npz'
+    original_path = os.path.join(current_dir, 'ElasticData_original.npz')
     np.savez_compressed(original_path,
                        f_train=f_train, f_test=f_test,
                        ux_train=ux_train, ux_test=ux_test,
@@ -212,7 +216,7 @@ def generate_elastic_data():
                        mesh_coords=mesh_coords,
                        n_train=n_train, n_test=n_test,
                        n_force_points=n_force_points, n_mesh_points=n_mesh_points,
-                       **normalization_stats)
+                       u_mean=u_mean, u_std=u_std, s_mean=s_mean, s_std=s_std)
     
     print(f"Original data saved to: {original_path}")
     
@@ -222,7 +226,8 @@ def load_elastic_data():
     """Load the generated elastic data in SetONet format."""
     try:
         from datasets import load_from_disk
-        ds = load_from_disk('/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_dataset')
+        dataset_path = os.path.join(current_dir, 'elastic_dataset')
+        ds = load_from_disk(dataset_path)
         return ds
     except Exception as e:
         print(f"Error loading dataset: {e}")
@@ -231,12 +236,14 @@ def load_elastic_data():
 
 def load_elastic_normalization_stats():
     """Load the normalization statistics for the elastic dataset."""
-    with open('/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/elastic_normalization_stats.json', 'r') as f:
+    stats_path = os.path.join(current_dir, 'elastic_normalization_stats.json')
+    with open(stats_path, 'r') as f:
         return json.load(f)
 
 def load_elastic_original():
     """Load the original elastic data arrays."""
-    data = np.load('/home/titanv/Stepan/setprojects/SetONet/Data/elastic_2d_data/ElasticData_original.npz')
+    original_path = os.path.join(current_dir, 'ElasticData_original.npz')
+    data = np.load(original_path)
     return {key: data[key] for key in data.keys()}
 
 if __name__ == "__main__":

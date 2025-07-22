@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from FunctionEncoder import BaseDataset, BaseCallback # Keep BaseDataset/Callback if used
+# from FunctionEncoder import BaseDataset, BaseCallback # Keep BaseDataset/Callback if used
 from tqdm import trange
 from torch.optim.lr_scheduler import _LRScheduler # Import base class for type hinting if needed
 from .utils.helper_utils import calculate_l2_relative_error
@@ -97,7 +97,7 @@ class SetONet(torch.nn.Module):
 
         if self.encoding_strategy == 'concatenate':
             # Determine phi input dimension
-            if self.use_positional_encoding: # True if pos_encoding_type is 'sinusoidal' and use_positional_encoding arg is True
+            if self.use_positional_encoding: # True only for 'sinusoidal' type and if use_positional_encoding arg is True
                 phi_input_dim = self.pos_encoding_dim + output_size_src
                 # Sinusoidal specific checks (since 'mlp' is removed, if use_positional_encoding is true, it must be sinusoidal)
                 if self.pos_encoding_dim % (2 * self.input_size_src) != 0:
@@ -333,10 +333,10 @@ class SetONet(torch.nn.Module):
 
     # This is the main training loop, kept consistent with the function encoder code.
     def train_model(self,
-                    dataset: BaseDataset,
+                    dataset, # : BaseDataset,
                     epochs: int, # Note: This loop runs 'epochs' times, each is one step
                     progress_bar=True,
-                    callback: BaseCallback = None):
+                    callback=None): # : BaseCallback = None):
         # set device
         device = next(self.parameters()).device
 

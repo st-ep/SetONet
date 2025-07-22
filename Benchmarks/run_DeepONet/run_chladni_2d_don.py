@@ -13,51 +13,48 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import required modules
-from Models.SetONet import SetONet
+from Models.deeponet_model import DeepONetWrapper
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.don_config_utils import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
-from Plotting.plot_elastic_2d_utils import plot_elastic_results
-from Data.elastic_2d_data.elastic_2d_dataset import load_elastic_dataset
+from Plotting.plot_chladni_utils import plot_chladni_results
+from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset, ChladniDataset
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train SetONet for Elastic 2D plate problem.")
+    parser = argparse.ArgumentParser(description="Train DeepONet for Chladni plate problem.")
     
     # Data parameters
-    # Default path relative to project root
-    default_data_path = os.path.join(project_root, "Data", "elastic_2d_data", "elastic_dataset")
-    parser.add_argument('--data_path', type=str, default=default_data_path, 
-                       help='Path to Elastic 2D dataset')
+    parser.add_argument('--data_path', type=str, default=None, 
+                       help='Path to Chladni dataset (if None, uses Data/chladni_data/chladni_dataset relative to project root)')
     
     # Model architecture
-    parser.add_argument('--son_p_dim', type=int, default=128, help='Latent dimension p for SetONet')
-    parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
-    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
-    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
-    parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
-    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
+    parser.add_argument('--don_p_dim', type=int, default=128, help='Latent dimension p for DeepONet')
+    parser.add_argument('--don_phi_hidden', type=int, default=256, help='Hidden size for DeepONet phi network')
+    parser.add_argument('--don_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
+    parser.add_argument('--don_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
+    parser.add_argument('--don_branch_hidden', type=int, default=128, help='Hidden size for DeepONet branch network')
+    parser.add_argument('--don_n_branch_layers', type=int, default=3, help='Number of layers in DeepONet branch network')
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for DeepONet networks')
     
     # Training parameters
-    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
+    parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
-    parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency for sinusoidal positional encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Model loading
-    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     
-    # Sensor dropout for training and evaluation
-    parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
+    # Evaluation robustness testing (sensor failures)
     parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
     parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
+    
+    # GPU selection
+    parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use (0, 1, etc.). If not specified, uses CUDA_VISIBLE_DEVICES or auto-detects')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging of training metrics')
@@ -69,7 +66,7 @@ def parse_arguments():
 def setup_logging(project_root):
     """Setup logging directory."""
     logs_base_in_project = os.path.join(project_root, "logs")
-    model_folder_name = "SetONet_elastic2d"
+    model_folder_name = "DeepONet_chladni"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
@@ -86,37 +83,28 @@ def get_activation_function(activation_name):
     }
     return activation_map.get(activation_name.lower(), nn.ReLU)
 
-def create_model(args, device):
-    """Create SetONet model for Elastic 2D problem."""
+def create_model(args, device, branch_input_dim):
+    """Create DeepONet model for Chladni problem."""
     activation_fn = get_activation_function(args.activation_fn)
     
-    model = SetONet(
-        input_size_src=2,  # 2D coordinates (x, y)
-        output_size_src=1,  # Scalar force values
-        input_size_tgt=2,  # 2D coordinates (x, y)
-        output_size_tgt=1,  # Scalar displacement values
-        p=args.son_p_dim,
-        phi_hidden_size=args.son_phi_hidden,
-        rho_hidden_size=args.son_rho_hidden,
-        trunk_hidden_size=args.son_trunk_hidden,
-        n_trunk_layers=args.son_n_trunk_layers,
+    model = DeepONetWrapper(
+        branch_input_dim=branch_input_dim,
+        trunk_input_dim=2,  # 2D coordinates
+        p=args.don_p_dim,
+        phi_hidden_size=args.don_phi_hidden,
+        trunk_hidden_size=args.don_trunk_hidden,
+        n_trunk_layers=args.don_n_trunk_layers,
+        branch_hidden_size=args.don_branch_hidden,
+        n_branch_layers=args.don_n_branch_layers,
         activation_fn=activation_fn,
-        use_deeponet_bias=True,
-        phi_output_size=args.son_phi_output_size,
-        initial_lr=args.son_lr,
+        initial_lr=args.don_lr,
         lr_schedule_steps=args.lr_schedule_steps,
         lr_schedule_gammas=args.lr_schedule_gammas,
-        pos_encoding_type=args.pos_encoding_type,  # Use the argument instead of hardcoded 'skip'
-        pos_encoding_dim=args.pos_encoding_dim,  # Add positional encoding dimension
-        pos_encoding_max_freq=args.pos_encoding_max_freq,  # Add max frequency parameter
-        aggregation_type=args.son_aggregation,
-        use_positional_encoding=(args.pos_encoding_type != 'skip'),  # Enable if not 'skip'
-        attention_n_tokens=1,
     ).to(device)
     
     return model
 
-def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0, replace_with_nearest=False):
+def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0, replace_with_nearest=False):
     """Evaluate the model on test data."""
     model.eval()
     test_data = dataset['test']
@@ -188,8 +176,6 @@ def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, 
     model.train()
     return avg_loss, avg_rel_error
 
-
-
 def main():
     """Main training function."""
     # Parse arguments and setup
@@ -198,35 +184,44 @@ def main():
     print(f"Using device: {device}")
     
     # Validate arguments
-    if not 0.0 <= args.train_sensor_dropoff <= 1.0:
-        raise ValueError("--train_sensor_dropoff must be between 0.0 and 1.0")
     if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
         raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
     
-    # Print sensor dropout configuration
+    if not 0.0 <= args.train_sensor_dropoff <= 1.0:
+        raise ValueError("--train_sensor_dropoff must be between 0.0 and 1.0")
+
     if args.train_sensor_dropoff > 0.0:
         replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
         print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} ({replacement_mode})")
         print("(This makes the model more robust to sensor failures)")
     
+    # Setup data path
+    if args.data_path is None:
+        args.data_path = os.path.join(project_root, "Data", "chladni_data", "chladni_dataset")
+    
     # Setup logging
     log_dir = setup_logging(project_root)
     
     # Load dataset using the new function
-    dataset, elastic_dataset = load_elastic_dataset(
+    dataset, _ = load_chladni_dataset(
         data_path=args.data_path,
         batch_size=args.batch_size,
-        device=str(device),
-        train_sensor_dropoff=args.train_sensor_dropoff,
-        replace_with_nearest=args.replace_with_nearest
+        device=str(device)  # Convert device to string
     )
     
-    if dataset is None or elastic_dataset is None:
+    if dataset is None:
         return
     
+    # Create dataset wrapper with corresponding normalization stats path
+    normalization_stats_path = os.path.join(os.path.dirname(args.data_path), 'chladni_normalization_stats.json')
+    chladni_dataset = ChladniDataset(dataset, batch_size=args.batch_size, device=str(device), 
+                                   normalization_stats_path=normalization_stats_path,
+                                   train_sensor_dropoff=args.train_sensor_dropoff,
+                                   replace_with_nearest=args.replace_with_nearest)
+    
     # Create model
-    print("Creating SetONet model...")
-    model = create_model(args, device)
+    print("Creating DeepONet model...")
+    model = create_model(args, device, chladni_dataset.n_points)
     
     # Print model info
     total_params = sum(p.numel() for p in model.parameters())
@@ -245,7 +240,7 @@ def main():
         callback = TensorBoardCallback(
             log_dir=tb_log_dir,
             dataset=dataset,
-            dataset_wrapper=elastic_dataset,
+            dataset_wrapper=chladni_dataset,
             device=device,
             eval_frequency=args.tb_eval_frequency,
             n_test_samples=args.tb_test_samples,
@@ -256,18 +251,18 @@ def main():
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
     
     # Train model
-    print(f"\nStarting training for {args.son_epochs} epochs...")
+    print(f"\nStarting training for {args.don_epochs} epochs...")
     
     model.train_model(
-        dataset=elastic_dataset,
-        epochs=args.son_epochs,
+        dataset=chladni_dataset,
+        epochs=args.don_epochs,
         progress_bar=True,
         callback=callback
     )
     
     # Evaluate model
     print("\nEvaluating model...")
-    avg_loss, avg_rel_error = evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, 
+    avg_loss, avg_rel_error = evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
                                             eval_sensor_dropoff=args.eval_sensor_dropoff, 
                                             replace_with_nearest=args.replace_with_nearest)
     
@@ -280,27 +275,17 @@ def main():
     
     # Plot results
     print("Generating plots...")
-    # Plot 3 test samples
     for i in range(3):
-        plot_save_path = os.path.join(log_dir, f"elastic_results_test_sample_{i}.png")
-        plot_elastic_results(model, dataset, elastic_dataset, device, sample_idx=i, 
-                           save_path=plot_save_path, dataset_split="test",
-                           eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                           replace_with_nearest=args.replace_with_nearest)
-    
-    # Plot 3 train samples  
-    for i in range(3):
-        plot_save_path = os.path.join(log_dir, f"elastic_results_train_sample_{i}.png")
-        plot_elastic_results(model, dataset, elastic_dataset, device, sample_idx=i, 
-                           save_path=plot_save_path, dataset_split="train",
-                           eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                           replace_with_nearest=args.replace_with_nearest)
+        plot_save_path = os.path.join(log_dir, f"chladni_results_sample_{i}.png")
+        plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=i, save_path=plot_save_path,
+                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
+                            replace_with_nearest=args.replace_with_nearest)
     
     # Save experiment configuration with test results
-    save_experiment_configuration(args, model, dataset, elastic_dataset, device, log_dir, dataset_type="elastic_2d", test_results=test_results)
+    save_experiment_configuration(args, model, dataset, chladni_dataset, device, log_dir, dataset_type="chladni_2d", test_results=test_results)
     
     # Save model
-    model_save_path = os.path.join(log_dir, "elastic2d_setonet_model.pth")
+    model_save_path = os.path.join(log_dir, "chladni_deeponet_model.pth")
     torch.save(model.state_dict(), model_save_path)
     print(f"Model saved to: {model_save_path}")
     print("Training completed!")

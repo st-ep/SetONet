@@ -11,37 +11,32 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_pa
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from Models.setonet_factory import create_setonet_model, load_pretrained_model
-from Models.setonet_trainer import train_setonet_model
-from Models.setonet_evaluator import evaluate_setonet_model
+from Models.deeponet_factory import create_deeponet_model, load_pretrained_model
+from Models.deeponet_trainer import train_deeponet_model
+from Models.deeponet_evaluator import evaluate_deeponet_model
 from Models.utils.experiment_utils import save_experiment_config
 from Plotting.plotting_utils import plot_operator_comparison
 from Data.data_utils import generate_batch
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train SetONet for a specific benchmark task.")
+    parser = argparse.ArgumentParser(description="Train DeepONet for a specific benchmark task.")
     
     # Benchmark selection
     parser.add_argument('--benchmark', type=str, required=True, choices=['integral', 'derivative'], 
                        help='Benchmark task: integral (f\' -> f) or derivative (f -> f\')')
     
-    # Model architecture
-    parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
-    parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
-    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
-    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
-    parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
-    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
+    # Model architecture (kept comparable to SetONet)
+    parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for DeepONet')
+    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
+    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
+    parser.add_argument('--don_branch_hidden', type=int, default=256, help='Hidden size for DeepONet branch network')
+    parser.add_argument('--don_n_branch_layers', type=int, default=3, help='Number of layers in DeepONet branch network')
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for DeepONet networks')
     
     # Training parameters
-    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=175000, help='Number of epochs for SetONet')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for sinusoidal positional encoding')
-    parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency/scale for sinusoidal encoding')
+    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
+    parser.add_argument('--son_epochs', type=int, default=175000, help='Number of epochs for DeepONet')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
@@ -53,14 +48,14 @@ def parse_arguments():
     parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
     
     # Model loading
-    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     
     return parser.parse_args()
 
 def setup_logging(project_root, benchmark):
     """Setup logging directory."""
     logs_base_in_project = os.path.join(project_root, "logs")
-    model_folder_name = f"SetONet_{benchmark}"
+    model_folder_name = f"DeepONet_{benchmark}"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
@@ -100,9 +95,9 @@ def create_sensor_points(params, device):
 def save_model(setonet_model, log_dir, benchmark, model_was_loaded):
     """Save trained model."""
     if not model_was_loaded:
-        model_path = os.path.join(log_dir, f"setonet_model_{benchmark}.pth")
+        model_path = os.path.join(log_dir, f"deeponet_model_{benchmark}.pth")
         torch.save(setonet_model.state_dict(), model_path)
-        print(f"SetONet {benchmark} model saved to {model_path}")
+        print(f"DeepONet {benchmark} model saved to {model_path}")
     else:
         print(f"\nSkipping model saving as pre-trained {benchmark} model was loaded.")
 
@@ -227,7 +222,7 @@ def main():
     sensor_x_original = create_sensor_points(params, device)
     
     # Initialize model
-    setonet_model = create_setonet_model(args, device)
+    setonet_model = create_deeponet_model(args, device, params['sensor_size'], params['n_trunk_points_train'], args.benchmark)
     
     # Load pre-trained model if available
     model_was_loaded = load_pretrained_model(setonet_model, args, device)
@@ -247,9 +242,9 @@ def main():
             'replace_with_nearest': params['replace_with_nearest']
             # No sensor drop-off in training params - only used for periodic test evaluation
         }
-        train_setonet_model(setonet_model, args, training_params, device, log_dir)
+        train_deeponet_model(setonet_model, args, training_params, device, log_dir)
     else:
-        print(f"\nSetONet {args.benchmark} model loaded. Skipping training.")
+        print(f"\nDeepONet {args.benchmark} model loaded. Skipping training.")
     
     # Evaluation
     eval_params = {
@@ -265,7 +260,7 @@ def main():
         'sensor_dropoff': params['eval_sensor_dropoff'],  # Only for evaluation
         'replace_with_nearest': params['replace_with_nearest']
     }
-    eval_result = evaluate_setonet_model(setonet_model, eval_params, device)
+    eval_result = evaluate_deeponet_model(setonet_model, eval_params, device)
     
     # Save model
     save_model(setonet_model, log_dir, args.benchmark, model_was_loaded)
