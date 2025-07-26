@@ -7,7 +7,7 @@ import argparse
 
 # Add the project root directory to sys.path
 current_script_path = os.path.abspath(__file__)
-project_root = os.path.dirname(os.path.dirname(current_script_path))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -23,7 +23,8 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for 2D heat problem.")
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, default="/home/titanv/Stepan/setprojects/SetONet/Data/heat_data/pcb_heat_adaptive_dataset9.0_n8192_N25_P10", 
+    default_data_path = os.path.join(project_root, "Data", "heat_data", "pcb_heat_adaptive_dataset8.0_n8192_N25_P30")
+    parser.add_argument('--data_path', type=str, default=default_data_path, 
                        help='Path to Heat 2D dataset')
     parser.add_argument('--adaptive_mesh', action='store_true', help='Use adaptive mesh dataset (auto-detected from data)')
     

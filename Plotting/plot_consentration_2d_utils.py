@@ -112,7 +112,7 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
         
         # Get prediction on visualization grid
         pred = model(source_coords, source_rates, target_coords)
-        pred_field = pred.squeeze().cpu().numpy().reshape(grid_n, grid_n).T
+        pred_field = pred.squeeze().cpu().numpy().reshape(grid_n, grid_n)
     
     # Calculate absolute error (same for both adaptive and uniform)
     abs_error = np.abs(field_gt - pred_field)
@@ -125,7 +125,7 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     # Custom layout with unequal gaps via intermediate blank columns.
     # Column pattern: 0-Prediction | 1-gap(0.1) | 2-GroundTruth | 3-gap(0.7) | 4-AbsoluteError
     # -------------------------------------------------------------------
-    fig = plt.figure(figsize=(20, 6))
+    fig = plt.figure(figsize=(21.5, 6))
     gs = GridSpec(1, 5, width_ratios=[1, 0.04, 1, 0.32, 1], wspace=0.0)
 
     ax_pred = fig.add_subplot(gs[0, 0])
@@ -146,10 +146,11 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     # Note: Using unified visualization grid for consistent comparison
     # Wind direction is fixed at +x direction (0 radians) for all samples
     
-    ax.set_title('Prediction')
-    ax.set_xlabel('X position')
-    ax.set_ylabel('Y position')
-    ax.grid(True, alpha=0.3)
+    # ax.set_title('Prediction')
+    ax.set_xlabel('X position', fontsize=18)
+    ax.set_ylabel('Y position', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
     # Add wind direction arrow
@@ -168,10 +169,11 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     # Note: Using unified visualization grid for consistent comparison
     # Wind direction is fixed at +x direction (0 radians) for all samples
     
-    ax.set_title('Ground Truth')
-    ax.set_xlabel('X position')
-    ax.set_ylabel('Y position')
-    ax.grid(True, alpha=0.3)
+    # ax.set_title('Ground Truth')
+    ax.set_xlabel('X position', fontsize=18)
+    ax.set_ylabel('Y position', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
     # Add wind direction arrow
@@ -189,10 +191,11 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     
     # Wind direction is fixed at +x direction (0 radians) for all samples
     
-    ax.set_title('Absolute Error')
-    ax.set_xlabel('X position')
-    ax.set_ylabel('Y position')
-    ax.grid(True, alpha=0.3)
+    # ax.set_title('Absolute Error')
+    ax.set_xlabel('X position', fontsize=18)
+    ax.set_ylabel('Y position', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
     # Calculate and display error statistics
@@ -200,11 +203,11 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     mean_error = np.mean(abs_error)
     rmse = np.sqrt(np.mean(abs_error**2))
     
-    # Add text box with error statistics
-    mesh_type = "Adaptive" if is_adaptive else "Uniform"
-    error_text = f'{mesh_type} Dataset\n(Unified {grid_n}×{grid_n} Viz)\nMax Error: {max_error:.4f}\nMean Error: {mean_error:.4f}\nRMSE: {rmse:.4f}'
-    ax.text(0.02, 0.98, error_text, transform=ax.transAxes, 
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    # Add text box with error statistics - REMOVED per user request
+    # mesh_type = "Adaptive" if is_adaptive else "Uniform"
+    # error_text = f'{mesh_type} Dataset\n(Unified {grid_n}×{grid_n} Viz)\nMax Error: {max_error:.4f}\nMean Error: {mean_error:.4f}\nRMSE: {rmse:.4f}'
+    # ax.text(0.02, 0.98, error_text, transform=ax.transAxes, 
+    #         verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
     # First, tighten layout so subplots take their final positions
     fig.tight_layout()
@@ -225,14 +228,16 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
 
     cbar_ax1 = fig.add_axes([left_conc, bottom, cb_width, height])
     conc_cbar = fig.colorbar(im2, cax=cbar_ax1)
-    conc_cbar.set_label('Concentration')
+    conc_cbar.set_label('Concentration', rotation=270, labelpad=20, fontsize=16)
+    conc_cbar.ax.tick_params(labelsize=16)
 
     # Absolute-error colorbar – right of Error subplot
     left_err = pos_err.x1 + gap_cb + 0.0 # place immediately after Error axis
 
     cbar_ax2 = fig.add_axes([left_err, bottom, cb_width, height])
     err_cbar = fig.colorbar(im3, cax=cbar_ax2)
-    err_cbar.set_label('|Error|')
+    err_cbar.set_label('|Error|', rotation=270, labelpad=20, fontsize=16)
+    err_cbar.ax.tick_params(labelsize=16)
 
     # Redraw the canvas to ensure everything renders correctly
     fig.canvas.draw()

@@ -104,7 +104,7 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
     # Custom layout with unequal gaps via intermediate blank columns.
     # Column pattern: 0-Prediction | 1-gap(0.1) | 2-GroundTruth | 3-gap(0.7) | 4-AbsoluteError
     # -------------------------------------------------------------------
-    fig = plt.figure(figsize=(20, 6))
+    fig = plt.figure(figsize=(21.5, 6))
     gs = GridSpec(1, 5, width_ratios=[1, 0.04, 1, 0.32, 1], wspace=0.0)
 
     ax_pred = fig.add_subplot(gs[0, 0])
@@ -124,19 +124,11 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
                   c=sources[:, 2], s=100, 
                   cmap='viridis', edgecolors='white', linewidth=2)
     
-    # Add adaptive points visualization for adaptive mesh (subsample for visibility)
-    if is_adaptive:
-        # Subsample adaptive points for better visualization
-        n_show = min(1000, len(grid_coords_gt))  # Show at most 1000 points
-        indices = np.random.choice(len(grid_coords_gt), n_show, replace=False)
-        ax.scatter(grid_coords_gt[indices, 0], grid_coords_gt[indices, 1], 
-                  c='cyan', s=0.5, alpha=0.4, label=f'Adaptive points ({n_show}/{len(grid_coords_gt)})')
-        ax.legend(loc='upper right', fontsize=8)
-    
-    ax.set_title('Prediction')
-    ax.set_xlabel('X position')
-    ax.set_ylabel('Y position')
-    ax.grid(True, alpha=0.3)
+    # ax.set_title('Prediction')
+    ax.set_xlabel('X position', fontsize=18)
+    ax.set_ylabel('Y position', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
     # Plot 2: Ground Truth
@@ -149,16 +141,11 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
                   c=sources[:, 2], s=100, 
                   cmap='viridis', edgecolors='white', linewidth=2)
     
-    # Add adaptive points visualization for adaptive mesh (same subsample)
-    if is_adaptive:
-        ax.scatter(grid_coords_gt[indices, 0], grid_coords_gt[indices, 1], 
-                  c='cyan', s=0.5, alpha=0.4, label=f'Adaptive points ({n_show}/{len(grid_coords_gt)})')
-        ax.legend(loc='upper right', fontsize=8)
-    
-    ax.set_title('Ground Truth')
-    ax.set_xlabel('X position')
-    ax.set_ylabel('Y position')
-    ax.grid(True, alpha=0.3)
+    # ax.set_title('Ground Truth')
+    ax.set_xlabel('X position', fontsize=18)
+    ax.set_ylabel('Y position', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
     # Plot 3: Absolute Error
@@ -171,23 +158,17 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
                   c='blue', s=100, 
                   edgecolors='white', linewidth=2, alpha=0.7)
     
-    ax.set_title('Absolute Error')
-    ax.set_xlabel('X position')
-    ax.set_ylabel('Y position')
-    ax.grid(True, alpha=0.3)
+    # ax.set_title('Absolute Error')
+    ax.set_xlabel('X position', fontsize=18)
+    ax.set_ylabel('Y position', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
     # Calculate and display error statistics
     max_error = np.nanmax(abs_error)
     mean_error = np.nanmean(abs_error)
     rmse = np.sqrt(np.nanmean(abs_error**2))
-    
-    # Add text box with error statistics
-    mesh_type = "Adaptive" if is_adaptive else "Uniform"
-    n_points_info = f", {len(grid_coords_gt)} points" if is_adaptive else ""
-    error_text = f'{mesh_type} Mesh{n_points_info}\nMax Error: {max_error:.4f}\nMean Error: {mean_error:.4f}\nRMSE: {rmse:.4f}'
-    ax.text(0.02, 0.98, error_text, transform=ax.transAxes, 
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
     # First, tighten layout so subplots take their final positions
     fig.tight_layout()
@@ -208,14 +189,16 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
 
     cbar_ax1 = fig.add_axes([left_temp, bottom, cb_width, height])
     temp_cbar = fig.colorbar(im2, cax=cbar_ax1)
-    temp_cbar.set_label('Temperature')
+    temp_cbar.set_label('Temperature', rotation=270, labelpad=20, fontsize=16)
+    temp_cbar.ax.tick_params(labelsize=16)
 
     # Absolute-error colorbar – right of Error subplot
     left_err = pos_err.x1 + gap_cb + 0.0 # place immediately after Error axis
 
     cbar_ax2 = fig.add_axes([left_err, bottom, cb_width, height])
     err_cbar = fig.colorbar(im3, cax=cbar_ax2)
-    err_cbar.set_label('|Error|')
+    err_cbar.set_label('|Error|', rotation=270, labelpad=20, fontsize=16)
+    err_cbar.ax.tick_params(labelsize=16)
 
     # Redraw the canvas to ensure everything renders correctly
     fig.canvas.draw()

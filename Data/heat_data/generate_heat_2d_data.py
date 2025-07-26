@@ -7,8 +7,16 @@ from __future__ import annotations
 
 import argparse
 import numpy as np
+import os
+import sys
 from datasets import Array3D, Dataset, Features, Sequence, Value
 from tqdm import tqdm
+
+# Add the project root directory to sys.path
+current_script_path = os.path.abspath(__file__)
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 def green_temperature(
     xs: np.ndarray,
@@ -252,8 +260,8 @@ def main():
     parser.add_argument("--grid", type=int, default=5, help="Grid resolution (N×N)")
 
     # source distribution
-    parser.add_argument("--n_min", type=int, default=10, help="Min # sources")
-    parser.add_argument("--n_max", type=int, default=10, help="Max # sources")
+    parser.add_argument("--n_min", type=int, default=30, help="Min # sources")
+    parser.add_argument("--n_max", type=int, default=30, help="Max # sources")
 
     # power distribution
     parser.add_argument("--constant_power", action="store_true", help="Set all Q_i = 1")
@@ -265,7 +273,7 @@ def main():
     
     # Adaptive mesh parameters
     parser.add_argument("--adaptive_mesh", action="store_true", help="Use adaptive mesh focused on temperature spikes")
-    parser.add_argument("--spike_focus", type=float, default=9.0, help="Focus strength on spikes (0=uniform, higher=more focused)")
+    parser.add_argument("--spike_focus", type=float, default=8.0, help="Focus strength on spikes (0=uniform, higher=more focused)")
     parser.add_argument("--n_adaptive_points", type=int, default=8192, help="Number of adaptive grid points")
     parser.add_argument("--initial_grid_size", type=int, default=25, help="Size of initial uniform grid (NxN)")
 
@@ -288,9 +296,10 @@ def main():
 
     # Use different dataset paths for adaptive vs uniform mesh
     if args.adaptive_mesh:
-        dataset_path = f"Data/heat_data/pcb_heat_adaptive_dataset{args.spike_focus}_n{args.n_adaptive_points}_N{args.initial_grid_size}_P{args.n_min}"
+        dataset_name = f"pcb_heat_adaptive_dataset{args.spike_focus}_n{args.n_adaptive_points}_N{args.initial_grid_size}_P{args.n_min}"
+        dataset_path = os.path.join(project_root, "Data", "heat_data", dataset_name)
     else:
-        dataset_path = "Data/heat_data/pcb_heat_dataset"
+        dataset_path = os.path.join(project_root, "Data", "heat_data", "pcb_heat_dataset")
 
     # Calculate total samples needed
     total_samples = args.train + args.test
