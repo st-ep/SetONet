@@ -131,14 +131,7 @@ def plot_single_sample(sample, sample_idx=0, grid_n=64, save_path=None):
             label="Heat Sources",
         )
     
-    # Add adaptive points visualization for adaptive mesh (subsample for visibility)
-    if is_adaptive and adaptive_coords is not None:
-        n_show = min(1000, len(adaptive_coords))  # Show at most 1000 points
-        indices = np.random.choice(len(adaptive_coords), n_show, replace=False)
-        ax_main.scatter(adaptive_coords[indices, 0], adaptive_coords[indices, 1], 
-                       c='cyan', s=0.5, alpha=0.4, 
-                       label=f'Adaptive points ({n_show}/{len(adaptive_coords)})')
-        ax_main.legend(loc='upper right', fontsize=8)
+    # Adaptive points visualization removed per user request
     
     # Temperature colorbar (initial position from GridSpec)
     fig.colorbar(im, cax=cax_temp, label="Temperature")
