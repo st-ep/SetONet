@@ -19,7 +19,7 @@ def plot_operator_comparison(
     use_zero_constant: bool = True, # New argument to control d_coeff for plotting
     sensor_dropoff: float = 0.0,  # New argument for sensor drop-off
     replace_with_nearest: bool = False,  # New argument for nearest neighbor replacement
-    sensors_to_plot_fraction: float = 0.3  # Fraction of sensors to plot (0.0 to 1.0)
+    show_sensor_markers: bool = True  # Whether to show sensor location markers
 ):
     """
     Plots comparison between true and predicted functions for operator learning.
@@ -37,16 +37,20 @@ def plot_operator_comparison(
         use_zero_constant: Whether to use zero integration constant
         sensor_dropoff: Sensor drop-off rate to apply (same as training/evaluation)
         replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
-        sensors_to_plot_fraction: Fraction of sensors to plot for visualization (0.0 to 1.0)
+        show_sensor_markers: Whether to show sensor location markers (plots every ~20th sensor)
     """
     print(f"Generating plots with {len(branch_input_locations)} branch points and {len(trunk_query_locations)} trunk points...")
+    
+    # Check if sensors have unique locations (for variable sensor detection)
+    unique_branch_locs = len(torch.unique(branch_input_locations.squeeze(), dim=0))
+    print(f"📍 Branch sensor locations: {len(branch_input_locations)} total, {unique_branch_locs} unique")
+    
     if sensor_dropoff > 0:
         replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
-        print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
+        print(f"🔧 Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
     
-    # Calculate number of sensors to plot
-    n_sensors_to_plot = max(1, int(len(branch_input_locations) * sensors_to_plot_fraction))
-    print(f"🎯 Plotting {n_sensors_to_plot} out of {len(branch_input_locations)} sensors ({sensors_to_plot_fraction:.1%})") 
+    if show_sensor_markers:
+        print(f"🎯 Will plot every ~{max(1, len(branch_input_locations) // 20)}th sensor for visualization clarity") 
     
     # Note: For variable sensor training, we use fixed sensor locations for plotting
     # to ensure consistent visualization across different runs
@@ -146,12 +150,34 @@ def plot_operator_comparison(
             branch_values_model = torch.tensor(branch_values_true_np, device=device, dtype=torch.float32).squeeze()
             actual_n_sensors = len(branch_input_locs_cpu)
 
-        # Plot the input function (left subplot) - NO SENSOR POINTS
+        # Plot the input function (left subplot) with optional sensor locations
         axs[0, 0].plot(branch_input_locs_plot.squeeze(), branch_values_plot.squeeze(), 'b-', linewidth=2, label='Input Function')
+        
+        if show_sensor_markers:
+            # Add sensor locations (plot every 20th sensor for clarity)
+            sensor_step = max(1, len(branch_input_locs_plot) // 20)  # Show ~20 sensors max
+            sensor_indices = range(0, len(branch_input_locs_plot), sensor_step)
+            
+            sensor_x_subset = branch_input_locs_plot.squeeze()[sensor_indices]
+            sensor_y_subset = branch_values_plot.squeeze()[sensor_indices]
+            
+            axs[0, 0].scatter(sensor_x_subset, sensor_y_subset, c='red', s=50, zorder=5, 
+                             label=f'Sensors (every {sensor_step}th, {len(sensor_indices)} shown)')
+        
+        # Count unique sensor locations
+        unique_sensors = len(torch.unique(branch_input_locs_plot.squeeze(), dim=0))
+        
+        # Add text box with sensor info
+        sensor_info = f'Total sensors: {actual_n_sensors}\nUnique locations: {unique_sensors}'
+        if sensor_dropoff > 0:
+            original_sensors = len(branch_input_locations) if sensor_dropoff > 0 else actual_n_sensors
+            sensor_info += f'\nOriginal: {original_sensors} (dropoff: {sensor_dropoff:.1%})'
+        
+        axs[0, 0].text(0.02, 0.98, sensor_info, transform=axs[0, 0].transAxes, 
+                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel(plot_ylabel_left)
-        # NO TITLE: axs[0, 0].set_title(plot_title_left)
         axs[0, 0].grid(True, alpha=0.3)
         axs[0, 0].legend()
 
@@ -206,269 +232,139 @@ def plot_operator_comparison(
         'axes.titlesize': 12
     })
 
-def plot_trunk_basis_functions(model, x_basis, p_dim, log_dir, model_name="SetONet"):
-    """
-    Plots the trunk basis functions for a neural operator model.
-    All basis functions for a model are plotted on a single subplot.
-    Saves the plots to the specified log directory.
+
+def plot_synthetic_1d_comparison(model, data_generator, params, log_dir, args, show_sensor_markers=True):
+    """Plot synthetic 1D benchmark results with proper handling of variable sensors and benchmarks."""
+    from Data.data_utils import generate_batch
     
-    Args:
-        model: The neural operator model (SetONet or DeepONet)
-        x_basis: Input coordinates for plotting basis functions
-        p_dim: Latent dimension (number of basis functions)
-        log_dir: Directory to save plots
-        model_name: Name of the model for filename
-    """
-    if model is None:
-        print(f"No {model_name} model provided to plot_trunk_basis_functions. Skipping plots.")
-        return
-
-    x_basis_cpu = x_basis.cpu().numpy().squeeze()
-
-    try:
-        with torch.no_grad():
-            # For SetONet, use the trunk method; for DeepONet, use trunk_net
-            if hasattr(model, 'trunk'):
-                basis_output = model.trunk(x_basis).cpu().numpy()
-            elif hasattr(model, 'trunk_net'):
-                basis_output = model.trunk_net(x_basis).cpu().numpy()
+    print("Generating plots...")
+    
+    device = next(model.parameters()).device
+    
+    # Create dense evaluation points for plotting
+    x_dense_plot = torch.linspace(params['input_range'][0], params['input_range'][1], 200, device=device).view(-1, 1)
+    
+    # Generate both train and test plots
+    for data_type in ['train', 'test']:
+        print(f"\n--- Generating {data_type.upper()} plots ---")
+        
+        # Determine sensor dropoff based on data type
+        current_sensor_dropoff = params.get('eval_sensor_dropoff', 0.0) if data_type == 'test' else 0.0
+        
+        if args.benchmark == 'derivative':
+            # For derivative: sensor locations -> dense plot locations
+            print(f"Plotting for Derivative Model (f -> f') - {data_type.upper()} data")
+            
+            if params.get('variable_sensors', False):
+                # For variable sensor training, use actual sensor locations from evaluation batches
+                print("Using actual sensor locations from evaluation batches")
+                
+                # Generate 3 different evaluation batches to show different sensor configurations
+                for batch_idx in range(3):
+                    print(f"Generating {data_type} plot for evaluation batch {batch_idx + 1}")
+                    
+                    batch_data = generate_batch(
+                        batch_size=1,
+                        n_trunk_points=params['n_trunk_points_train'],
+                        sensor_x=None,
+                        scale=params['scale'],
+                        input_range=params['input_range'],
+                        device=device,
+                        constant_zero=True,
+                        variable_sensors=True,
+                        sensor_size=params['sensor_size']
+                    )
+                    
+                    actual_sensor_locations = batch_data[5]
+                    
+                    plot_operator_comparison(
+                        model_to_use=model,
+                        branch_input_locations=actual_sensor_locations,
+                        trunk_query_locations=x_dense_plot,
+                        input_range=params['input_range'],
+                        scale=params['scale'],
+                        log_dir=log_dir,
+                        num_samples_to_plot=1,
+                        plot_filename_prefix=f"{data_type}_{args.benchmark}_eval_batch_{batch_idx+1}_",
+                        is_inverse_task=False,
+                        use_zero_constant=True,
+                        sensor_dropoff=current_sensor_dropoff,
+                        replace_with_nearest=params.get('replace_with_nearest', False),
+                        show_sensor_markers=show_sensor_markers
+                    )
             else:
-                print(f"Model does not have 'trunk' or 'trunk_net' method. Cannot plot basis functions.")
-                return
-        
-        actual_p_dim = basis_output.shape[1]
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        # Plot up to p_dim basis functions (or all if fewer available)
-        num_to_plot = min(p_dim, actual_p_dim) if p_dim else actual_p_dim
-        
-        for i in range(num_to_plot):
-            ax.plot(x_basis_cpu, basis_output[:, i], label=f"Basis {i+1}", alpha=0.8)  # type: ignore
-        
-        ax.set_xlabel("Input coordinate")  # type: ignore
-        ax.set_ylabel("Trunk Output Value")  # type: ignore
-        ax.set_title(f"{model_name} Trunk Basis Functions (showing {num_to_plot}/{actual_p_dim})")  # type: ignore
-        ax.grid(True, linestyle='--', alpha=0.7)  # type: ignore
-        
-        # Only show legend if not too many basis functions
-        if num_to_plot <= 10:
-            ax.legend(loc='best')  # type: ignore
-        
-        plt.tight_layout()
-        plot_filename = os.path.join(log_dir, f"{model_name.lower()}_trunk_basis_plot.png")
-        plt.savefig(plot_filename)
-        print(f"{model_name} trunk basis plot saved to {plot_filename}")
-        plt.close(fig)
-        
-    except Exception as e:
-        print(f"Could not plot {model_name} trunk basis functions: {e}")
-
-# Legacy function for backward compatibility
-def plot_trunk_basis_functions_legacy(deeponet_model, setonet_model, x_basis, setonet_p_dim, log_dir):
-    """
-    Legacy function for backward compatibility.
-    Plots the trunk basis functions for DeepONet or SetONet.
-    """
-    if deeponet_model:
-        plot_trunk_basis_functions(deeponet_model, x_basis, None, log_dir, "DeepONet")
-    
-    if setonet_model:
-        plot_trunk_basis_functions(setonet_model, x_basis, setonet_p_dim, log_dir, "SetONet")
-
-def plot_darcy_comparison(
-    model_to_use,
-    dataset,
-    sensor_x,
-    query_x,
-    sensor_indices,
-    query_indices,
-    log_dir,
-    num_samples_to_plot=3,
-    plot_filename_prefix="darcy_1d",
-    sensor_dropoff: float = 0.0,
-    replace_with_nearest: bool = False,
-    dataset_split="test",
-    batch_size=64,  # Add batch_size parameter to determine sample spacing
-    variable_sensors=False,  # Always False now - kept for compatibility
-    grid_points=None,  # Kept for compatibility but not used
-    sensors_to_plot_fraction: float = 0.3  # Fraction of sensors to plot (0.0 to 1.0)
-):
-    """
-    Plots comparison between true and predicted solutions for Darcy 1D dataset.
-    Creates separate plots for each sample, with 2 subplots per plot (similar to derivative benchmark).
-    Always uses fixed sensor locations.
-    
-    Args:
-        model_to_use: Trained SetONet model
-        dataset: Darcy 1D dataset (HuggingFace dataset)
-        sensor_x: Fixed sensor locations [n_sensors, 1]
-        query_x: Query locations [n_queries, 1] 
-        sensor_indices: Indices for sensor locations in the grid
-        query_indices: Indices for query locations in the grid
-        log_dir: Directory to save plots
-        num_samples_to_plot: Number of sample functions to plot
-        plot_filename_prefix: Prefix for plot filenames
-        sensor_dropoff: Sensor drop-off rate to apply (same as evaluation)
-        replace_with_nearest: Whether to replace dropped sensors with nearest neighbors
-        dataset_split: Which dataset split to use ("train" or "test")
-        batch_size: Batch size used during evaluation (to select samples from different batches)
-        variable_sensors: Always False - kept for compatibility
-        grid_points: Kept for compatibility but not used
-        sensors_to_plot_fraction: Fraction of sensors to plot for visualization (0.0 to 1.0)
-    """
-    print(f"Generating Darcy 1D plots with {len(sensor_x)} sensor points and {len(query_x)} query points...")
-    if sensor_dropoff > 0:
-        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
-        print(f"Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
-    
-    # Calculate number of sensors to plot
-    n_sensors_to_plot = max(1, int(len(sensor_x) * sensors_to_plot_fraction))
-    print(f"📍 Using FIXED sensor locations for both train and test plots")
-    print(f"🎯 Plotting {n_sensors_to_plot} out of {len(sensor_x)} sensors ({sensors_to_plot_fraction:.1%})")
-    
-    model_to_use.eval()
-    device = next(model_to_use.parameters()).device
-
-    if not model_to_use:
-        print("No model provided to plot_darcy_comparison. Skipping plot.")
-        return
-
-    # Get data from specified split
-    split_data = dataset[dataset_split]
-    n_available = len(split_data)
-    
-    # Select samples from different batches to get diverse sensor dropout patterns
-    # This ensures we see different sensor configurations when dropout is applied
-    sample_indices = []
-    for i in range(num_samples_to_plot):
-        # Select first sample from each batch: batch_i * batch_size + 0
-        sample_idx = i * batch_size
-        if sample_idx < n_available:
-            sample_indices.append(sample_idx)
-        else:
-            # Fall back to sequential if we run out of batches
-            sample_indices.append(i)
-    
-    n_to_plot = len(sample_indices)
-    
-    print(f"Plotting {n_to_plot} samples from {dataset_split} set")
-    print(f"Sample indices: {sample_indices} (from different batches for diverse sensor patterns)")
-    
-    # Convert query locations to CPU for plotting
-    query_x_cpu = query_x.cpu().squeeze()
-
-    # Set larger font sizes for better readability
-    plt.rcParams.update({
-        'font.size': 14,          # Default text size
-        'axes.labelsize': 16,     # X and Y labels
-        'xtick.labelsize': 16,    # X axis tick labels
-        'ytick.labelsize': 16,    # Y axis tick labels
-        'legend.fontsize': 16,    # Legend text (line labels)
-        'axes.titlesize': 18      # Title text (not used but set for consistency)
-    })
-
-    for plot_idx, sample_idx in enumerate(sample_indices):
-        fig, axs = plt.subplots(1, 2, figsize=(14, 6), squeeze=False)
-
-        # Get sample data
-        sample = split_data[sample_idx]
-        x_grid = torch.tensor(sample['X'], dtype=torch.float32)
-        u_full = torch.tensor(sample['u'], dtype=torch.float32).to(device)
-        s_full = torch.tensor(sample['s'], dtype=torch.float32).to(device)
-        
-        # Always use fixed sensor locations
-        u_at_sensors_true = u_full[sensor_indices]
-        sensor_x_for_plot = sensor_x
-        
-        s_at_queries_true = s_full[query_indices]
-
-        # Apply sensor drop-off if specified (same as evaluation)
-        if sensor_dropoff > 0.0:
-            from Data.data_utils import apply_sensor_dropoff
-            
-            # Apply drop-off to sensor data
-            sensor_x_device = sensor_x_for_plot.clone().to(device)
-            sensor_locs_dropped, sensor_values_dropped = apply_sensor_dropoff(
-                sensor_x_device, u_at_sensors_true, sensor_dropoff, replace_with_nearest
-            )
-            
-            # For plotting
-            sensor_x_plot = sensor_locs_dropped.cpu()
-            u_at_sensors_plot = sensor_values_dropped.cpu().numpy()
-            
-            # For model input
-            sensor_x_model = sensor_locs_dropped
-            u_at_sensors_model = sensor_values_dropped
-            actual_n_sensors = len(sensor_x_plot)
-        else:
-            # No drop-off - use fixed sensor locations
-            sensor_x_plot = sensor_x_for_plot.cpu()
-            u_at_sensors_plot = u_at_sensors_true.cpu().numpy()
-            sensor_x_model = sensor_x_for_plot
-            u_at_sensors_model = u_at_sensors_true
-            actual_n_sensors = len(sensor_x_plot)
-
-        # Plot input source term u(x) - NO SENSOR POINTS (left subplot)
-        axs[0, 0].plot(x_grid.cpu(), u_full.cpu(), 'b-', linewidth=2, label='Input Source Term $u(x)$')
-        
-        axs[0, 0].set_xlabel('$x$')
-        axs[0, 0].set_ylabel('$u(x)$')
-        
-        # NO TITLE: Create title with sample info
-        # title_suffix = f"(Sample {sample_idx})"
-        # axs[0, 0].set_title(f'Input Source Term $u(x)$ {title_suffix}')
-        axs[0, 0].grid(True, alpha=0.3)
-        axs[0, 0].legend()
-
-        # Get model prediction
-        with torch.no_grad():
-            # Prepare inputs for the model
-            query_x_model = query_x.clone().to(device)
-
-            if hasattr(model_to_use, 'forward_branch'):  # SetONet
-                xs, us, ys = prepare_setonet_inputs(
-                    sensor_x_model,
-                    1,  # batch_size = 1 for single sample
-                    u_at_sensors_model.unsqueeze(-1),  # Add feature dimension
-                    query_x_model,
-                    actual_n_sensors
+                # Fixed sensors - use the original sensor locations
+                plot_operator_comparison(
+                    model_to_use=model,
+                    branch_input_locations=data_generator.sensor_x_original,
+                    trunk_query_locations=x_dense_plot,
+                    input_range=params['input_range'],
+                    scale=params['scale'],
+                    log_dir=log_dir,
+                    num_samples_to_plot=3,
+                    plot_filename_prefix=f"{data_type}_{args.benchmark}_",
+                    is_inverse_task=False,
+                    use_zero_constant=True,
+                    sensor_dropoff=current_sensor_dropoff,
+                    replace_with_nearest=params.get('replace_with_nearest', False),
+                    show_sensor_markers=show_sensor_markers
                 )
-
-                # Get model prediction
-                s_at_queries_pred = model_to_use(xs, us, ys)
-                s_at_queries_pred = s_at_queries_pred.squeeze().cpu().numpy()
-            else:  # DeepONet
-                branch_input = u_at_sensors_model.unsqueeze(0)  # [1, actual_n_sensors]
-                trunk_input = query_x_model.unsqueeze(0)  # [1, n_queries, 1]
-                dummy_xs = sensor_x_model.unsqueeze(0)  # [1, actual_n_sensors, 1] (ignored)
-                s_at_queries_pred = model_to_use(dummy_xs, branch_input.unsqueeze(-1), trunk_input).squeeze().cpu().numpy()
-
-        # Plot true vs predicted solution s(x) (right subplot)
-        axs[0, 1].plot(query_x_cpu, s_at_queries_true.cpu().numpy(), 'g-', linewidth=2, label='True')
-        axs[0, 1].plot(query_x_cpu, s_at_queries_pred, 'r--', linewidth=2, label='SetONet Prediction')
-        axs[0, 1].set_xlabel('$x$')
-        axs[0, 1].set_ylabel('$s(x)$')
-        # NO TITLE: axs[0, 1].set_title(f'Output: True vs Predicted $s(x)$ {title_suffix}')
-        axs[0, 1].grid(True, alpha=0.3)
-        axs[0, 1].legend()
-
-        plt.tight_layout()
-        
-        # Save plot
-        replacement_suffix = "_nearest" if replace_with_nearest and sensor_dropoff > 0 else ""
-        dropoff_suffix = f"_dropoff_{sensor_dropoff:.1f}{replacement_suffix}" if sensor_dropoff > 0 else ""
-        save_path = os.path.join(log_dir, f"{plot_filename_prefix}_{dataset_split}_sample_{sample_idx}_plot_{plot_idx+1}{dropoff_suffix}.png")
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Saved Darcy 1D {dataset_split} plot for sample {sample_idx} (plot {plot_idx+1}) to {save_path}")
-        plt.close(fig)
-
-    # Reset font parameters to default to avoid affecting other plots
-    plt.rcParams.update({
-        'font.size': 10,
-        'axes.labelsize': 10,
-        'xtick.labelsize': 8,
-        'ytick.labelsize': 8,
-        'legend.fontsize': 10,
-        'axes.titlesize': 12
-    }) 
+        elif args.benchmark == 'integral':
+            # For integral: f' -> f (dense plot locations -> sensor locations)
+            print(f"Plotting for Integral Model (f' -> f) - {data_type.upper()} data")
+            
+            if params.get('variable_sensors', False):
+                # For variable sensor training, generate different batches to show different sensor configurations
+                print("Using variable sensor locations (different query sensor locations per batch)")
+                
+                # Generate 3 different evaluation batches to show different sensor configurations
+                for batch_idx in range(3):
+                    print(f"Generating {data_type} plot for evaluation batch {batch_idx + 1}")
+                    
+                    batch_data = generate_batch(
+                        batch_size=1,
+                        n_trunk_points=params['n_trunk_points_train'],
+                        sensor_x=None,
+                        scale=params['scale'],
+                        input_range=params['input_range'],
+                        device=device,
+                        constant_zero=True,
+                        variable_sensors=True,
+                        sensor_size=params['sensor_size']
+                    )
+                    
+                    actual_sensor_locations = batch_data[5]
+                    
+                    plot_operator_comparison(
+                        model_to_use=model,
+                        branch_input_locations=actual_sensor_locations,
+                        trunk_query_locations=x_dense_plot,
+                        input_range=params['input_range'],
+                        scale=params['scale'],
+                        log_dir=log_dir,
+                        num_samples_to_plot=1,
+                        plot_filename_prefix=f"{data_type}_{args.benchmark}_eval_batch_{batch_idx+1}_",
+                        is_inverse_task=True,
+                        use_zero_constant=True,
+                        sensor_dropoff=current_sensor_dropoff,
+                        replace_with_nearest=params.get('replace_with_nearest', False),
+                        show_sensor_markers=show_sensor_markers
+                    )
+            else:
+                # Fixed sensors - use the original sensor locations
+                plot_sensor_x = data_generator.sensor_x_original if data_generator.sensor_x_original is not None else torch.rand(params['sensor_size'], device=device).sort()[0].view(-1, 1) * (params['input_range'][1] - params['input_range'][0]) + params['input_range'][0]
+                plot_operator_comparison(
+                    model_to_use=model,
+                    branch_input_locations=plot_sensor_x,
+                    trunk_query_locations=x_dense_plot,
+                    input_range=params['input_range'],
+                    scale=params['scale'],
+                    log_dir=log_dir,
+                    num_samples_to_plot=3,
+                    plot_filename_prefix=f"{data_type}_{args.benchmark}_",
+                    is_inverse_task=True,
+                    use_zero_constant=True,
+                    sensor_dropoff=current_sensor_dropoff,
+                    replace_with_nearest=params.get('replace_with_nearest', False),
+                    show_sensor_markers=show_sensor_markers
+                ) 

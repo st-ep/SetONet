@@ -85,6 +85,9 @@ class TensorBoardCallback:
         if hasattr(self.dataset_wrapper, 'sensor_indices') and hasattr(self.dataset_wrapper, 'query_indices'):
             # Use dataset wrapper for evaluation (Darcy style with indexed subsampling)
             return self._evaluate_with_wrapper(model)
+        elif hasattr(self.dataset_wrapper, 'benchmark') and hasattr(self.dataset_wrapper, 'sample'):
+            # Use synthetic data generator for evaluation (Synthetic1DDataGenerator style)
+            return self._evaluate_with_synthetic_generator(model)
         else:
             # Use direct dataset access for evaluation (Elastic/Chladni style with full point clouds)
             return self._evaluate_with_dataset(model)
@@ -128,8 +131,90 @@ class TensorBoardCallback:
                 rel_error = calculate_l2_relative_error(pred, target)
                 total_rel_error += rel_error.item()
         
+                model.train()
+        return total_rel_error / n_test 
+    
+    def _evaluate_with_synthetic_generator(self, model):
+        """Evaluate using synthetic data generator (for synthetic 1D benchmarks)."""
+        from Data.data_utils import generate_batch, apply_sensor_dropoff
+        
+        # Use the same parameters as the dataset wrapper for consistency
+        batch_size = 8  # Small batch size for evaluation
+        n_eval_batches = max(1, self.n_test_samples // batch_size)
+        
+        total_rel_error = 0.0
+        
+        with torch.no_grad():
+            for _ in range(n_eval_batches):
+                # Generate test batch the same way as in the main evaluation
+                if self.dataset_wrapper.variable_sensors:
+                    batch_data = generate_batch(
+                        batch_size=batch_size,
+                        n_trunk_points=self.dataset_wrapper.n_trunk_points_train,
+                        sensor_x=None,
+                        scale=self.dataset_wrapper.scale,
+                        input_range=self.dataset_wrapper.input_range,
+                        device=self.device,
+                        constant_zero=True,
+                        variable_sensors=True,
+                        sensor_size=self.dataset_wrapper.sensor_size
+                    )
+                    f_at_sensors, _, f_at_trunk, f_prime_at_trunk, batch_x_eval_points, sensor_x_batch = batch_data
+                    sensor_x_to_use = sensor_x_batch
+                else:
+                    batch_data = generate_batch(
+                        batch_size=batch_size,
+                        n_trunk_points=self.dataset_wrapper.n_trunk_points_train,
+                        sensor_x=self.dataset_wrapper.sensor_x_original,
+                        scale=self.dataset_wrapper.scale,
+                        input_range=self.dataset_wrapper.input_range,
+                        device=self.device,
+                        constant_zero=True
+                    )
+                    f_at_sensors, _, f_at_trunk, f_prime_at_trunk, batch_x_eval_points = batch_data
+                    sensor_x_to_use = self.dataset_wrapper.sensor_x_original
+                
+                # Apply sensor dropout if specified
+                sensor_x_used = sensor_x_to_use
+                f_at_sensors_used = f_at_sensors
+                
+                if self.eval_sensor_dropoff > 0.0:
+                    if self.dataset_wrapper.benchmark == 'derivative':
+                        sensor_x_dropped, f_at_sensors_dropped = apply_sensor_dropoff(
+                            sensor_x_to_use, f_at_sensors, self.eval_sensor_dropoff, self.replace_with_nearest
+                        )
+                        sensor_x_used = sensor_x_dropped
+                        f_at_sensors_used = f_at_sensors_dropped
+                    elif self.dataset_wrapper.benchmark == 'integral':
+                        batch_x_eval_points_dropped, f_prime_at_trunk_dropped = apply_sensor_dropoff(
+                            batch_x_eval_points, f_prime_at_trunk.T, self.eval_sensor_dropoff, self.replace_with_nearest
+                        )
+                        batch_x_eval_points = batch_x_eval_points_dropped
+                        f_prime_at_trunk = f_prime_at_trunk_dropped.T
+                
+                # Prepare inputs based on benchmark (same logic as main script)
+                if self.dataset_wrapper.benchmark == 'derivative':
+                    xs = sensor_x_used.unsqueeze(0).expand(batch_size, -1, -1)
+                    us = f_at_sensors_used.unsqueeze(-1)
+                    ys = batch_x_eval_points.unsqueeze(0).expand(batch_size, -1, -1)
+                    target = f_prime_at_trunk.T.unsqueeze(-1)
+                elif self.dataset_wrapper.benchmark == 'integral':
+                    xs = batch_x_eval_points.unsqueeze(0).expand(batch_size, -1, -1)
+                    us = f_prime_at_trunk.T.unsqueeze(-1)
+                    ys = sensor_x_used.unsqueeze(0).expand(batch_size, -1, -1)
+                    target = f_at_sensors_used.unsqueeze(-1)
+                else:
+                    raise ValueError(f"Unknown benchmark: {self.dataset_wrapper.benchmark}")
+                
+                # Forward pass
+                pred = model(xs, us, ys)
+                
+                # Calculate relative error for this batch
+                rel_error = calculate_l2_relative_error(pred.squeeze(-1), target.squeeze(-1))
+                total_rel_error += rel_error.item()
+        
         model.train()
-        return total_rel_error / n_test
+        return total_rel_error / n_eval_batches
     
     def _evaluate_with_dataset(self, model):
         """Evaluate using direct dataset access (elastic/chladni style)."""

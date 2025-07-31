@@ -65,6 +65,7 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
             "train_samples": train_size,
             "test_samples": test_size,
             "total_samples": train_size + test_size,
+            "variable_sensors": getattr(args, 'variable_sensors', False),
             "train_sensor_dropoff": getattr(args, 'train_sensor_dropoff', 0.0),
             "eval_sensor_dropoff": getattr(args, 'eval_sensor_dropoff', 0.0),
             "replace_with_nearest": getattr(args, 'replace_with_nearest', False)
