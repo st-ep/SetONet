@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import matplotlib.colors as colors
 from datasets import load_from_disk
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 def load_transport_dataset(dataset_path: str = "Data/transport_data/transport_dataset"):
     """Load the transport dataset from disk and extract parameters."""
@@ -108,8 +109,10 @@ def plot_single_sample(dataset, sample_idx=0, split='train', save_path=None):
     im = ax3.contourf(xx, yy, V_mag, levels=20, cmap='viridis')
     ax3.contour(xx, yy, V_mag, levels=10, colors='black', alpha=0.3, linewidths=0.5)
     
-    # Add colorbar
-    plt.colorbar(im, ax=ax3, label='Velocity Magnitude')
+    # Add colorbar with same height as subplot
+    divider = make_axes_locatable(ax3)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im, cax=cax, label='Velocity Magnitude')
     
     ax3.set_xlim(-5, 5)
     ax3.set_ylim(-5, 5)
@@ -210,7 +213,10 @@ def plot_transport_statistics(dataset, save_path=None):
               V_mean[::skip, ::skip, 0], V_mean[::skip, ::skip, 1],
               color='white', angles='xy', scale_units='xy', scale=1, alpha=0.8)
     
-    plt.colorbar(im, ax=ax4, label='Mean Velocity Magnitude')
+    # Add colorbar with same height as subplot
+    divider4 = make_axes_locatable(ax4)
+    cax4 = divider4.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im, cax=cax4, label='Mean Velocity Magnitude')
     ax4.set_xlabel('x')
     ax4.set_ylabel('y')
     ax4.set_title('Average Velocity Field')
@@ -227,7 +233,7 @@ def plot_transport_statistics(dataset, save_path=None):
 def main():
     # Hardcoded settings
     dataset_path = "Data/transport_data/transport_dataset"
-    output_dir = Path("plots")
+    output_dir = Path("Data/transport_data/plots")
     
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -242,16 +248,16 @@ def main():
     
     print(f"Dataset loaded with {len(dataset['train'])} train samples and {len(dataset['test'])} test samples")
     
-    # Plot sample transport maps from train set (up to 3)
-    n_train_plots = min(3, len(dataset['train']))
+    # Plot sample transport maps from train set (up to 10)
+    n_train_plots = min(10, len(dataset['train']))
     print(f"Plotting {n_train_plots} sample transport maps from train set...")
     for i in range(n_train_plots):
         save_path = output_dir / f"train_transport_sample_{i+1}.png"
         plot_single_sample(dataset, i, 'train', save_path)
         plt.close()  # Close figure to save memory
     
-    # Plot sample transport maps from test set (up to 3)
-    n_test_plots = min(3, len(dataset['test']))
+    # Plot sample transport maps from test set (up to 10)
+    n_test_plots = min(10, len(dataset['test']))
     print(f"Plotting {n_test_plots} sample transport maps from test set...")
     for i in range(n_test_plots):
         save_path = output_dir / f"test_transport_sample_{i+1}.png"

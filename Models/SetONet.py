@@ -168,7 +168,7 @@ class SetONet(torch.nn.Module):
         div_term = torch.exp(torch.arange(half_dim, device=coords.device) * -(torch.log(torch.tensor(self.pos_encoding_max_freq, device=coords.device)) / half_dim))
 
         # Expand div_term for broadcasting: (1, 1, 1, half_dim)
-        div_term = div_term.view(1, 1, 1, half_dim)
+        div_term = div_term.reshape(1, 1, 1, half_dim)
 
         # Expand coords for broadcasting: (batch, n_sensors, input_size_src, 1)
         coords_expanded = coords.unsqueeze(-1)
@@ -182,12 +182,12 @@ class SetONet(torch.nn.Module):
 
         # Interleave sin and cos and flatten the last two dimensions
         # Shape: (batch, n_sensors, input_size_src, dims_per_coord)
-        encoding = torch.cat([sin_embed, cos_embed], dim=-1).view(
+        encoding = torch.cat([sin_embed, cos_embed], dim=-1).reshape(
             coords.shape[0], coords.shape[1], self.input_size_src, dims_per_coord
         )
 
         # Reshape to final desired dimension: (batch, n_sensors, pos_encoding_dim)
-        encoding = encoding.view(coords.shape[0], coords.shape[1], self.pos_encoding_dim)
+        encoding = encoding.reshape(coords.shape[0], coords.shape[1], self.pos_encoding_dim)
 
         return encoding
 
@@ -217,7 +217,7 @@ class SetONet(torch.nn.Module):
                 # Shape: (batch, n_sensors, pos_encoding_dim)
                 encoded_xs_full = self._sinusoidal_encoding(xs)
                 # Reshape: (batch * n_sensors, pos_encoding_dim)
-                encoded_xs = encoded_xs_full.view(batch_size * n_sensors, self.pos_encoding_dim)
+                encoded_xs = encoded_xs_full.reshape(batch_size * n_sensors, self.pos_encoding_dim)
 
                 # Concatenate the encoded location and value
                 # Shape: (batch * n_sensors, pos_encoding_dim + output_size_src)
@@ -235,7 +235,7 @@ class SetONet(torch.nn.Module):
 
         # Reshape back for aggregation
         # Shape: (batch_size, n_sensors, phi_output_size)
-        phi_output_reshaped = phi_output.view(batch_size, n_sensors, self.phi_output_size)
+        phi_output_reshaped = phi_output.reshape(batch_size, n_sensors, self.phi_output_size)
 
         # ---- Aggregation over sensors ---------------------------------------
         if self.aggregation == "mean":
@@ -252,7 +252,7 @@ class SetONet(torch.nn.Module):
 
         # Reshape rho output to match the desired structure for einsum
         # Shape: (batch_size, p, output_size_tgt)
-        branch_out = rho_output.view(batch_size, self.p, self.output_size_tgt)
+        branch_out = rho_output.reshape(batch_size, self.p, self.output_size_tgt)
 
         return branch_out
 
@@ -274,7 +274,7 @@ class SetONet(torch.nn.Module):
 
         # Reshape trunk output for einsum
         # Shape: (batch_size, n_points, p, output_size_tgt)
-        trunk_out = trunk_out_flat.view(batch_size, n_points, self.p, self.output_size_tgt)
+        trunk_out = trunk_out_flat.reshape(batch_size, n_points, self.p, self.output_size_tgt)
         return trunk_out
 
     def forward(self, xs, us, ys):
@@ -365,8 +365,8 @@ class SetONet(torch.nn.Module):
             # Calculate relative L2 error for progress bar
             with torch.no_grad():
                 # Reshape to (batch_size, n_points) for helper function if needed
-                pred_flat = estimated_G_u_ys.squeeze(-1) if estimated_G_u_ys.shape[-1] == 1 else estimated_G_u_ys.view(estimated_G_u_ys.shape[0], -1)
-                target_flat = G_u_ys.squeeze(-1) if G_u_ys.shape[-1] == 1 else G_u_ys.view(G_u_ys.shape[0], -1)
+                pred_flat = estimated_G_u_ys.squeeze(-1) if estimated_G_u_ys.shape[-1] == 1 else estimated_G_u_ys.reshape(estimated_G_u_ys.shape[0], -1)
+                target_flat = G_u_ys.squeeze(-1) if G_u_ys.shape[-1] == 1 else G_u_ys.reshape(G_u_ys.shape[0], -1)
                 rel_l2_error = calculate_l2_relative_error(pred_flat, target_flat)
 
             # add loss components (can add regularization later if needed)

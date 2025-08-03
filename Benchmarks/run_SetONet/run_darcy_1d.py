@@ -252,7 +252,7 @@ def main():
     
     # Generate plots
     print("Generating plots...")
-    from Plotting.plotting_utils import plot_darcy_comparison
+    from Plotting.plot_darcy_1d_utils import plot_darcy_comparison
     
     # Plot 3 test samples
     for i in range(3):
