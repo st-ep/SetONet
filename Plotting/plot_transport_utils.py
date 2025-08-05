@@ -85,14 +85,17 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     
     divider1 = make_axes_locatable(ax1)
     cax1 = divider1.append_axes("right", size="5%", pad=0.05)
-    plt.colorbar(im1, cax=cax1, label='Velocity Magnitude')
+    cbar1 = plt.colorbar(im1, cax=cax1, label='Velocity Magnitude')
+    cbar1.set_label('Velocity Magnitude', fontsize=16)
+    cbar1.ax.tick_params(labelsize=14)
     
     ax1.set_xlim(xx.min(), xx.max())
     ax1.set_ylim(yy.min(), yy.max())
-    ax1.set_xlabel('x')
-    ax1.set_ylabel('y')
-    ax1.set_title(f'Ground Truth\n({dataset_split.title()} Sample {sample_idx+1})')
+    ax1.set_xlabel('x', fontsize=16)
+    ax1.set_ylabel('y', fontsize=16)
+    ax1.set_title(f'Ground Truth\n({dataset_split.title()} Sample {sample_idx+1})', fontsize=16)
     ax1.set_aspect('equal')
+    ax1.tick_params(axis='both', which='major', labelsize=14)
     
     # Plot 2: Prediction (ONLY magnitude, no vectors)
     ax2 = axes[1]
@@ -101,14 +104,17 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     
     divider2 = make_axes_locatable(ax2)
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
-    plt.colorbar(im2, cax=cax2, label='Velocity Magnitude')
+    cbar2 = plt.colorbar(im2, cax=cax2, label='Velocity Magnitude')
+    cbar2.set_label('Velocity Magnitude', fontsize=16)
+    cbar2.ax.tick_params(labelsize=14)
     
     ax2.set_xlim(xx.min(), xx.max())
     ax2.set_ylim(yy.min(), yy.max())
-    ax2.set_xlabel('x')
-    ax2.set_ylabel('y')
-    ax2.set_title(f'Prediction\n({dataset_split.title()} Sample {sample_idx+1})')
+    ax2.set_xlabel('x', fontsize=16)
+    ax2.set_ylabel('y', fontsize=16)
+    ax2.set_title(f'Prediction\n({dataset_split.title()} Sample {sample_idx+1})', fontsize=16)
     ax2.set_aspect('equal')
+    ax2.tick_params(axis='both', which='major', labelsize=14)
     
     # Plot 3: Absolute Error
     ax3 = axes[2]
@@ -117,14 +123,17 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     
     divider3 = make_axes_locatable(ax3)
     cax3 = divider3.append_axes("right", size="5%", pad=0.05)
-    plt.colorbar(im3, cax=cax3, label='Error Magnitude')
+    cbar3 = plt.colorbar(im3, cax=cax3, label='Error Magnitude')
+    cbar3.set_label('Error Magnitude', fontsize=16)
+    cbar3.ax.tick_params(labelsize=14)
     
     ax3.set_xlim(xx.min(), xx.max())
     ax3.set_ylim(yy.min(), yy.max())
-    ax3.set_xlabel('x')
-    ax3.set_ylabel('y')
-    ax3.set_title(f'Absolute Error\n({dataset_split.title()} Sample {sample_idx+1})')
+    ax3.set_xlabel('x', fontsize=16)
+    ax3.set_ylabel('y', fontsize=16)
+    ax3.set_title(f'Absolute Error\n({dataset_split.title()} Sample {sample_idx+1})', fontsize=16)
     ax3.set_aspect('equal')
+    ax3.tick_params(axis='both', which='major', labelsize=14)
     
     plt.tight_layout()
     
@@ -215,42 +224,50 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     # Create figure with 4 subplots in one row
     fig, axes = plt.subplots(1, 4, figsize=(24, 6))
     
-    # Common settings for all plots
-    xlim = (-5, 5)
-    ylim = (-5, 5)
+    # Common settings for all plots - use actual grid extent with small padding
+    padding = 0.2
+    xlim = (xx.min() - padding, xx.max() + padding)
+    ylim = (yy.min() - padding, yy.max() + padding)
     
     # Plot 1: Predicted Velocity Vectors (ONLY vectors, no magnitude)
     ax1 = axes[0]
-    skip = max(3, grid_h // 10)  # Adaptive skip for vectors (fewer vectors)
+    
+    # Create indices that always include boundaries
+    n_vectors = 10  # Number of vectors along each axis
+    x_indices = np.linspace(0, grid_h-1, n_vectors, dtype=int)
+    y_indices = np.linspace(0, grid_w-1, n_vectors, dtype=int)
+    x_grid, y_grid = np.meshgrid(x_indices, y_indices, indexing='ij')
     
     # Plot ONLY velocity vectors on clean background
-    ax1.quiver(xx[::skip, ::skip], yy[::skip, ::skip],
-              V_pred[::skip, ::skip, 0], V_pred[::skip, ::skip, 1],
-              color='red', angles='xy', scale_units='xy', scale=1, alpha=0.8, width=0.003)
+    ax1.quiver(xx[x_grid, y_grid], yy[x_grid, y_grid],
+              V_pred[x_grid, y_grid, 0], V_pred[x_grid, y_grid, 1],
+              color='orange', angles='xy', scale_units='xy', scale=1, alpha=0.8, width=0.003)
     
     ax1.set_xlim(xlim)
     ax1.set_ylim(ylim)
-    ax1.set_xlabel('x')
-    ax1.set_ylabel('y')
-    ax1.set_title(f'Predicted Velocity Vectors\n({dataset_split.title()} Sample {sample_idx+1})')
+    ax1.set_xlabel('x', fontsize=16)
+    ax1.set_ylabel('y', fontsize=16)
+    ax1.set_title('Predicted Velocity Vectors', fontsize=16)
     ax1.set_aspect('equal')
     ax1.grid(True, alpha=0.3)
+    ax1.tick_params(axis='both', which='major', labelsize=14)
     
     # Plot 2: Ground Truth Velocity Vectors (ONLY vectors, no magnitude)
     ax2 = axes[1]
     
-    # Plot ONLY velocity vectors on clean background
-    ax2.quiver(xx[::skip, ::skip], yy[::skip, ::skip],
-              V_gt[::skip, ::skip, 0], V_gt[::skip, ::skip, 1],
-              color='red', angles='xy', scale_units='xy', scale=1, alpha=0.8, width=0.003)
+    # Plot ONLY velocity vectors on clean background (using same indices)
+    ax2.quiver(xx[x_grid, y_grid], yy[x_grid, y_grid],
+              V_gt[x_grid, y_grid, 0], V_gt[x_grid, y_grid, 1],
+              color='orange', angles='xy', scale_units='xy', scale=1, alpha=0.8, width=0.003)
     
     ax2.set_xlim(xlim)
     ax2.set_ylim(ylim)
-    ax2.set_xlabel('x')
-    ax2.set_ylabel('y')
-    ax2.set_title(f'Ground Truth Velocity Vectors\n({dataset_split.title()} Sample {sample_idx+1})')
+    ax2.set_xlabel('x', fontsize=16)
+    ax2.set_ylabel('y', fontsize=16)
+    ax2.set_title('Ground Truth Velocity Vectors', fontsize=16)
     ax2.set_aspect('equal')
     ax2.grid(True, alpha=0.3)
+    ax2.tick_params(axis='both', which='major', labelsize=14)
     
     # Plot 3: Predicted Transport Map
     ax3 = axes[2]
@@ -260,24 +277,23 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     # Plot predicted target points
     ax3.scatter(pred_target_pts_np[:, 0], pred_target_pts_np[:, 1], c='red', s=15, alpha=0.7, label='Predicted targets')
     
-    # Draw transport arrows (showing all points)
+    # Draw transport trajectories as dashed lines (showing all points)
     n_arrows = len(source_pts_np)  # Use all points
     indices = np.arange(len(source_pts_np))  # All indices
     for i in indices:
-        ax3.arrow(source_pts_np[i, 0], source_pts_np[i, 1], 
-                 pred_target_pts_np[i, 0] - source_pts_np[i, 0], 
-                 pred_target_pts_np[i, 1] - source_pts_np[i, 1],
-                 head_width=0.05, head_length=0.05, 
-                 fc='gray', ec='gray', alpha=0.6, length_includes_head=True)
+        ax3.plot([source_pts_np[i, 0], pred_target_pts_np[i, 0]], 
+                [source_pts_np[i, 1], pred_target_pts_np[i, 1]],
+                '--', color='gray', alpha=0.6, linewidth=1)
     
     ax3.set_xlim(xlim)
     ax3.set_ylim(ylim)
-    ax3.set_xlabel('x')
-    ax3.set_ylabel('y')
-    ax3.set_title(f'Predicted Transport Map\n({dataset_split.title()} Sample {sample_idx+1})')
-    ax3.legend()
+    ax3.set_xlabel('x', fontsize=16)
+    ax3.set_ylabel('y', fontsize=16)
+    ax3.set_title('Predicted Transport Map', fontsize=16)
+    ax3.legend(fontsize=14)
     ax3.grid(True, alpha=0.3)
     ax3.set_aspect('equal')
+    ax3.tick_params(axis='both', which='major', labelsize=14)
     
     # Plot 4: Ground Truth Transport Map
     ax4 = axes[3]
@@ -287,33 +303,23 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     # Plot ground truth target points
     ax4.scatter(target_pts_np[:, 0], target_pts_np[:, 1], c='green', s=15, alpha=0.7, label='True targets')
     
-    # Draw transport arrows (subsample for visibility)
+    # Draw transport trajectories as dashed lines
     for i in indices:  # Use same indices as predicted for fair comparison
-        ax4.arrow(source_pts_np[i, 0], source_pts_np[i, 1], 
-                 target_pts_np[i, 0] - source_pts_np[i, 0], 
-                 target_pts_np[i, 1] - source_pts_np[i, 1],
-                 head_width=0.05, head_length=0.05, 
-                 fc='gray', ec='gray', alpha=0.6, length_includes_head=True)
+        ax4.plot([source_pts_np[i, 0], target_pts_np[i, 0]], 
+                [source_pts_np[i, 1], target_pts_np[i, 1]],
+                '--', color='gray', alpha=0.6, linewidth=1)
     
     ax4.set_xlim(xlim)
     ax4.set_ylim(ylim)
-    ax4.set_xlabel('x')
-    ax4.set_ylabel('y')
-    ax4.set_title(f'Ground Truth Transport Map\n({dataset_split.title()} Sample {sample_idx+1})')
-    ax4.legend()
+    ax4.set_xlabel('x', fontsize=16)
+    ax4.set_ylabel('y', fontsize=16)
+    ax4.set_title('Ground Truth Transport Map', fontsize=16)
+    ax4.legend(fontsize=14)
     ax4.grid(True, alpha=0.3)
     ax4.set_aspect('equal')
+    ax4.tick_params(axis='both', which='major', labelsize=14)
     
     plt.tight_layout()
-    
-    # Calculate and display transport map error metrics
-    transport_error = np.mean(np.linalg.norm(pred_target_pts_np - target_pts_np, axis=1))
-    velocity_mse = np.mean((V_pred - V_gt)**2)
-    
-    # Add text box with metrics
-    metrics_text = f'Transport Error: {transport_error:.3f}\nVelocity MSE: {velocity_mse:.2e}'
-    fig.text(0.02, 0.98, metrics_text, fontsize=10, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")

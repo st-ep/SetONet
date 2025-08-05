@@ -199,9 +199,11 @@ def plot_operator_comparison(
                 operator_output_pred = model_to_use(xs, us, ys)
                 operator_output_pred = operator_output_pred.squeeze().cpu().numpy()
             else:  # DeepONet
-                branch_input = branch_values_model.unsqueeze(0)  # [1, actual_n_sensors]
-                trunk_input = trunk_query_locs_model_dev.unsqueeze(0)  # [1, n_trunk, 1]
-                operator_output_pred = model_to_use(branch_input, trunk_input).squeeze().cpu().numpy()
+                # Prepare inputs for DeepONetWrapper which expects (xs, us, ys)
+                xs = branch_input_locs_model.unsqueeze(0)  # [1, actual_n_sensors, 1] - sensor locations (ignored by DeepONet but required)
+                us = branch_values_model.unsqueeze(0).unsqueeze(-1)  # [1, actual_n_sensors, 1] - sensor values
+                ys = trunk_query_locs_model_dev.unsqueeze(0)  # [1, n_trunk, 1] - query locations
+                operator_output_pred = model_to_use(xs, us, ys).squeeze().cpu().numpy()
 
         # Plot the output comparison (right subplot)
         axs[0, 1].plot(trunk_query_locs_cpu, operator_output_true_np.squeeze(), 'g-', linewidth=2, label='True')

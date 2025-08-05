@@ -277,3 +277,43 @@ def load_synthetic_pretrained_model(setonet_model, args, device):
             args.load_model_path = None
     
     return False
+
+def create_synthetic_deeponet_model(args, params, device):
+    """Create DeepONet model for synthetic 1D benchmark."""
+    from Models.DeepONet import DeepONetWrapper
+    
+    print(f"\n--- Initializing DeepONet Model for {args.benchmark} ---")
+    print(f"Using activation function: {args.activation_fn}")
+    
+    activation_fn = get_activation_function(args.activation_fn)
+    
+    model = DeepONetWrapper(
+        branch_input_dim=params['sensor_size'],  # Fixed size for branch network input
+        trunk_input_dim=1,  # 1D coordinates (x)
+        p=args.don_p_dim,
+        phi_hidden_size=args.don_phi_hidden,
+        trunk_hidden_size=args.don_trunk_hidden,
+        n_trunk_layers=args.don_n_trunk_layers,
+        branch_hidden_size=args.don_branch_hidden,
+        n_branch_layers=args.don_n_branch_layers,
+        activation_fn=activation_fn,
+        initial_lr=args.don_lr,
+        lr_schedule_steps=args.lr_schedule_steps,
+        lr_schedule_gammas=args.lr_schedule_gammas,
+        use_deeponet_bias=True,
+    ).to(device)
+    
+    return model
+
+def load_synthetic_pretrained_deeponet_model(deeponet_model, args, device):
+    """Load a pre-trained DeepONet model if path is provided."""
+    if args.load_model_path:
+        if os.path.exists(args.load_model_path):
+            deeponet_model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            print(f"Loaded pre-trained DeepONet model from: {args.load_model_path}")
+            return True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
+            args.load_model_path = None
+    
+    return False
