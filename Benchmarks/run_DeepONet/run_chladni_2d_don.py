@@ -13,10 +13,10 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import required modules
-from Models.deeponet_model import DeepONetWrapper
+from Models.DeepONet import DeepONetWrapper
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.don_config_utils import save_experiment_configuration
+from Models.utils.config_utils_don import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Plotting.plot_chladni_utils import plot_chladni_results
 from Data.chladni_data.chladni_2d_dataset import load_chladni_dataset, ChladniDataset
@@ -39,7 +39,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
-    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=50000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
@@ -48,8 +48,7 @@ def parse_arguments():
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     
     # Evaluation robustness testing (sensor failures)
-    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
-    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0) using bilinear interpolation. Simulates sensor failures during testing')
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
     
     # GPU selection
@@ -102,7 +101,7 @@ def create_model(args, device, branch_input_dim):
     
     return model
 
-def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0, replace_with_nearest=False):
+def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0):
     """Evaluate the model on test data."""
     model.eval()
     test_data = dataset['test']
@@ -110,8 +109,7 @@ def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
     
     # Print sensor dropout configuration
     if eval_sensor_dropoff > 0:
-        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
-        print(f"Applying sensor drop-off rate: {eval_sensor_dropoff:.1%} with {replacement_mode}")
+        print(f"Applying sensor drop-off rate: {eval_sensor_dropoff:.1%} with bilinear interpolation")
         print("(This tests model robustness to sensor failures)")
     
     total_loss = 0.0
@@ -138,19 +136,23 @@ def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
             xs_used = xs
             us_used = us
             if eval_sensor_dropoff > 0.0:
-                from Data.data_utils import apply_sensor_dropoff
+                from Data.data_utils import apply_sensor_dropoff_with_2d_interpolation
                 
-                # Apply dropout to sensor data (remove batch dimension for dropout function)
-                xs_dropped, us_dropped = apply_sensor_dropoff(
-                    xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
-                    us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
-                    eval_sensor_dropoff,
-                    replace_with_nearest
+                # For Chladni 2D problem, use bilinear interpolation to maintain fixed input size
+                # Chladni uses a 32x32 regular grid (1024 points total)
+                grid_shape = (32, 32)  # Based on numPoints in chladni_plate_generator.py
+                
+                # Apply dropout with bilinear interpolation 
+                _, us_interpolated = apply_sensor_dropoff_with_2d_interpolation(
+                    xs.squeeze(0),  # 2D coordinates [n_sensors, 2]
+                    us.squeeze(0).squeeze(-1),  # Sensor values [n_sensors]
+                    grid_shape,
+                    eval_sensor_dropoff
                 )
                 
-                # Add batch dimension back
-                xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
-                us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
+                # Keep original sensor locations, use interpolated values
+                xs_used = xs  # (1, n_sensors, 2) - unchanged
+                us_used = us_interpolated.unsqueeze(0).unsqueeze(-1)  # (1, n_sensors, 1)
             
             # Forward pass
             pred_norm = model(xs_used, us_used, ys)
@@ -166,8 +168,7 @@ def evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
     avg_rel_error = total_rel_error / n_test
     
     if eval_sensor_dropoff > 0.0:
-        replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
-        print(f"Test Results with {eval_sensor_dropoff:.1%} sensor dropout ({replacement_mode}) - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
+        print(f"Test Results with {eval_sensor_dropoff:.1%} sensor dropout (bilinear interpolation) - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
     else:
         print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
     
@@ -189,9 +190,12 @@ def main():
         raise ValueError("--train_sensor_dropoff must be between 0.0 and 1.0")
 
     if args.train_sensor_dropoff > 0.0:
-        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
-        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} ({replacement_mode})")
+        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} (removal)")
         print("(This makes the model more robust to sensor failures)")
+    
+    if args.eval_sensor_dropoff > 0:
+        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using bilinear interpolation")
+        print("(Training will use full sensor data)")
     
     # Setup data path
     if args.data_path is None:
@@ -215,7 +219,7 @@ def main():
     chladni_dataset = ChladniDataset(dataset, batch_size=args.batch_size, device=str(device), 
                                    normalization_stats_path=normalization_stats_path,
                                    train_sensor_dropoff=args.train_sensor_dropoff,
-                                   replace_with_nearest=args.replace_with_nearest)
+                                   replace_with_nearest=False)  # DeepONet uses padding for eval, removal for training
     
     # Create model
     print("Creating DeepONet model...")
@@ -242,8 +246,7 @@ def main():
             device=device,
             eval_frequency=args.tb_eval_frequency,
             n_test_samples=args.tb_test_samples,
-            eval_sensor_dropoff=args.eval_sensor_dropoff,
-            replace_with_nearest=args.replace_with_nearest
+            eval_sensor_dropoff=args.eval_sensor_dropoff
         )
         print(f"TensorBoard logs will be saved to: {tb_log_dir}")
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
@@ -261,8 +264,7 @@ def main():
     # Evaluate model
     print("\nEvaluating model...")
     avg_loss, avg_rel_error = evaluate_model(model, dataset, chladni_dataset, device, n_test_samples=100, 
-                                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                                            replace_with_nearest=args.replace_with_nearest)
+                                            eval_sensor_dropoff=args.eval_sensor_dropoff)
     
     # Prepare test results for configuration saving
     test_results = {
@@ -277,7 +279,7 @@ def main():
         plot_save_path = os.path.join(log_dir, f"chladni_results_sample_{i}.png")
         plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=i, save_path=plot_save_path,
                             eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                            replace_with_nearest=args.replace_with_nearest)
+                            replace_with_nearest=False)
     
     # Save experiment configuration with test results
     save_experiment_configuration(args, model, dataset, chladni_dataset, device, log_dir, dataset_type="chladni_2d", test_results=test_results)

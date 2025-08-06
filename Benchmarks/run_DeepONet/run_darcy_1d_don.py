@@ -12,10 +12,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_pa
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from Models.deeponet_model import DeepONetWrapper
+from Models.DeepONet import DeepONetWrapper
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.don_config_utils import save_experiment_configuration
+from Models.utils.config_utils_don import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.darcy_1d_data.darcy_1d_dataset import (
     load_darcy_dataset, DarcyDataGenerator, create_sensor_points, 
@@ -41,14 +41,13 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
-    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=25000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Sensor dropout and evaluation
-    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation (0.0-1.0)')
-    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors')
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation (0.0-1.0) using interpolation')
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0)')
     parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples for evaluation')
     parser.add_argument('--n_query_points', type=int, default=301, help='Number of query points for evaluation')
@@ -86,7 +85,7 @@ def get_activation_function(activation_name):
 
 def create_deeponet_model(args, device):
     """Create DeepONet model for Darcy 1D problem."""
-    print(f"\n--- Initializing DeepONet Model for {args.benchmark} ---")
+    print(f"\n--- Initializing DeepONet Model for Darcy 1D ---")
     print(f"Using activation function: {args.activation_fn}")
     
     activation_fn = get_activation_function(args.activation_fn)
@@ -129,6 +128,14 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+    # Validate arguments
+    if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
+        raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
+    
+    if args.eval_sensor_dropoff > 0:
+        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using interpolation")
+        print("(Training will use full sensor data)")
+    
     # Add benchmark argument for compatibility
     args.benchmark = 'darcy_1d'
     
@@ -169,8 +176,7 @@ def main():
             device=device,
             eval_frequency=args.tb_eval_frequency,
             n_test_samples=args.tb_test_samples,
-            eval_sensor_dropoff=args.eval_sensor_dropoff,
-            replace_with_nearest=args.replace_with_nearest
+            eval_sensor_dropoff=args.eval_sensor_dropoff
         )
         print(f"TensorBoard logs will be saved to: {tb_log_dir}")
     
@@ -188,7 +194,7 @@ def main():
     
     # Evaluate model
     print("\nEvaluating model...")
-    from Data.data_utils import apply_sensor_dropoff
+    from Data.data_utils import apply_sensor_dropoff_with_interpolation
     
     deeponet_model.eval()
     test_data = dataset['test']
@@ -206,12 +212,12 @@ def main():
             
             # Apply sensor dropout if specified
             if args.eval_sensor_dropoff > 0.0:
-                xs_dropped, us_dropped = apply_sensor_dropoff(
+                _, us_interpolated = apply_sensor_dropoff_with_interpolation(
                     sensor_x, xs_data.squeeze(0).squeeze(-1), 
-                    args.eval_sensor_dropoff, args.replace_with_nearest
+                    args.eval_sensor_dropoff
                 )
-                xs_data = us_dropped.unsqueeze(0).unsqueeze(-1)
-                sensor_x_used = xs_dropped.unsqueeze(0)
+                xs_data = us_interpolated.unsqueeze(0).unsqueeze(-1)
+                sensor_x_used = sensor_x.unsqueeze(0)  # Keep original sensor locations
             else:
                 sensor_x_used = sensor_x.unsqueeze(0)
             
@@ -236,7 +242,7 @@ def main():
     
     # Generate plots
     print("Generating plots...")
-    from Plotting.plotting_utils import plot_darcy_comparison
+    from Plotting.plot_darcy_1d_utils import plot_darcy_comparison
     
     # Plot 3 test samples
     for i in range(3):
@@ -245,7 +251,7 @@ def main():
             model_to_use=deeponet_model, dataset=dataset, sensor_x=sensor_x, query_x=query_x,
             sensor_indices=sensor_indices, query_indices=query_indices, log_dir=log_dir,
             num_samples_to_plot=1, plot_filename_prefix=f"darcy_1d_test_{i}",
-            sensor_dropoff=args.eval_sensor_dropoff, replace_with_nearest=args.replace_with_nearest,
+            sensor_dropoff=args.eval_sensor_dropoff, replace_with_nearest=False,
             dataset_split="test", batch_size=args.batch_size, variable_sensors=False,
             grid_points=grid_points, sensors_to_plot_fraction=0.05
         )

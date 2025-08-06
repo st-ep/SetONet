@@ -13,10 +13,10 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import required modules
-from Models.deeponet_model import DeepONetWrapper
+from Models.DeepONet import DeepONetWrapper
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.don_config_utils import save_experiment_configuration
+from Models.utils.config_utils_don import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Plotting.plot_elastic_2d_utils import plot_elastic_results
 from Data.elastic_2d_data.elastic_2d_dataset import load_elastic_dataset
@@ -41,7 +41,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
-    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=25000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for DeepONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
@@ -54,8 +54,7 @@ def parse_arguments():
     
     # Sensor dropout for training and evaluation
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
-    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
-    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0) using interpolation. Simulates sensor failures during testing')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging of training metrics')
@@ -104,7 +103,7 @@ def create_model(args, device, branch_input_dim):
     
     return model
 
-def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0, replace_with_nearest=False):
+def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, eval_sensor_dropoff=0.0):
     """Evaluate the model on test data."""
     model.eval()
     test_data = dataset['test']
@@ -112,8 +111,7 @@ def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, 
     
     # Print sensor dropout configuration
     if eval_sensor_dropoff > 0:
-        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
-        print(f"Applying sensor drop-off rate: {eval_sensor_dropoff:.1%} with {replacement_mode}")
+        print(f"Applying sensor drop-off rate: {eval_sensor_dropoff:.1%} with interpolation")
         print("(This tests model robustness to sensor failures)")
     
     total_loss = 0.0
@@ -140,19 +138,22 @@ def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, 
             xs_used = xs
             us_used = us
             if eval_sensor_dropoff > 0.0:
-                from Data.data_utils import apply_sensor_dropoff
+                from Data.data_utils import apply_sensor_dropoff_with_interpolation
                 
-                # Apply dropout to sensor data (remove batch dimension for dropout function)
-                xs_dropped, us_dropped = apply_sensor_dropoff(
-                    xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
-                    us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
-                    eval_sensor_dropoff,
-                    replace_with_nearest
+                # For elastic 2D, sensors are 1D (along y-axis at x=1), so we can use interpolation
+                # Extract y-coordinates for interpolation (sensors are along y-axis)
+                sensor_y_coords = xs.squeeze(0)[:, 1:2]  # Extract y-coordinates [n_sensors, 1]
+                
+                # Apply dropout with interpolation 
+                _, us_interpolated = apply_sensor_dropoff_with_interpolation(
+                    sensor_y_coords,  # 1D y-coordinates for interpolation
+                    us.squeeze(0).squeeze(-1),  # Sensor values [n_sensors]
+                    eval_sensor_dropoff
                 )
                 
-                # Add batch dimension back
-                xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
-                us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
+                # Keep original sensor locations, use interpolated values
+                xs_used = xs  # (1, n_sensors, 2) - unchanged
+                us_used = us_interpolated.unsqueeze(0).unsqueeze(-1)  # (1, n_sensors, 1)
             
             # Forward pass
             pred_norm = model(xs_used, us_used, ys)
@@ -168,8 +169,7 @@ def evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, 
     avg_rel_error = total_rel_error / n_test
     
     if eval_sensor_dropoff > 0.0:
-        replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
-        print(f"Test Results with {eval_sensor_dropoff:.1%} sensor dropout ({replacement_mode}) - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
+        print(f"Test Results with {eval_sensor_dropoff:.1%} sensor dropout (interpolation) - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
     else:
         print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
     
@@ -193,9 +193,12 @@ def main():
     
     # Print sensor dropout configuration
     if args.train_sensor_dropoff > 0.0:
-        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
-        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} ({replacement_mode})")
+        print(f"Training with sensor drop-off rate: {args.train_sensor_dropoff:.1%} (removal)")
         print("(This makes the model more robust to sensor failures)")
+    
+    if args.eval_sensor_dropoff > 0:
+        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using interpolation")
+        print("(Training will use full sensor data)")
     
     # Setup logging
     log_dir = setup_logging(project_root)
@@ -206,7 +209,7 @@ def main():
         batch_size=args.batch_size,
         device=str(device),
         train_sensor_dropoff=args.train_sensor_dropoff,
-        replace_with_nearest=args.replace_with_nearest
+        replace_with_nearest=False  # DeepONet uses interpolation for eval, removal for training
     )
     
     if dataset is None or elastic_dataset is None:
@@ -237,8 +240,7 @@ def main():
             device=device,
             eval_frequency=args.tb_eval_frequency,
             n_test_samples=args.tb_test_samples,
-            eval_sensor_dropoff=args.eval_sensor_dropoff,
-            replace_with_nearest=args.replace_with_nearest
+            eval_sensor_dropoff=args.eval_sensor_dropoff
         )
         print(f"TensorBoard logs will be saved to: {tb_log_dir}")
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
@@ -256,8 +258,7 @@ def main():
     # Evaluate model
     print("\nEvaluating model...")
     avg_loss, avg_rel_error = evaluate_model(model, dataset, elastic_dataset, device, n_test_samples=100, 
-                                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                                            replace_with_nearest=args.replace_with_nearest)
+                                            eval_sensor_dropoff=args.eval_sensor_dropoff)
     
     # Prepare test results for configuration saving
     test_results = {
@@ -274,7 +275,7 @@ def main():
         plot_elastic_results(model, dataset, elastic_dataset, device, sample_idx=i, 
                            save_path=plot_save_path, dataset_split="test",
                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                           replace_with_nearest=args.replace_with_nearest)
+                           replace_with_nearest=False)
     
     # Plot 3 train samples  
     for i in range(3):
@@ -282,7 +283,7 @@ def main():
         plot_elastic_results(model, dataset, elastic_dataset, device, sample_idx=i, 
                            save_path=plot_save_path, dataset_split="train",
                            eval_sensor_dropoff=args.eval_sensor_dropoff, 
-                           replace_with_nearest=args.replace_with_nearest)
+                           replace_with_nearest=False)
     
     # Save experiment configuration with test results
     save_experiment_configuration(args, model, dataset, elastic_dataset, device, log_dir, dataset_type="elastic_2d", test_results=test_results)

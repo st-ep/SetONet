@@ -169,6 +169,6 @@ def setup_parameters(args):
         'sensor_seed': 42,
         'variable_sensors': False,
         'eval_sensor_dropoff': args.eval_sensor_dropoff,
-        'replace_with_nearest': args.replace_with_nearest,
+        'replace_with_nearest': getattr(args, 'replace_with_nearest', False),  # Default to False for DeepONet scripts
         'train_sensor_dropoff': args.train_sensor_dropoff,
     } 

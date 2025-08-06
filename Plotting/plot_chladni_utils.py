@@ -30,23 +30,48 @@ def plot_chladni_results(model, dataset, chladni_dataset, device, sample_idx=0, 
     dropout_info = ""
     
     if eval_sensor_dropoff > 0.0:
-        from Data.data_utils import apply_sensor_dropoff
-        
-        # Apply dropout to sensor data (remove batch dimension for dropout function)
-        xs_dropped, us_dropped = apply_sensor_dropoff(
-            xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
-            us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
-            eval_sensor_dropoff,
-            replace_with_nearest
-        )
-        
-        # Add batch dimension back
-        xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
-        us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
-        
-        n_sensors_remaining = xs_used.shape[1]
-        replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
-        dropout_info = f" (Dropout: {eval_sensor_dropoff:.1%}, {n_sensors_remaining}/{n_sensors_orig} sensors, {replacement_mode})"
+        # Check if this is SetONet or DeepONet based on model capabilities
+        if hasattr(model, 'forward_branch'):  # SetONet
+            from Data.data_utils import apply_sensor_dropoff
+            
+            # SetONet can handle variable input sizes, so we use removal/replacement
+            xs_dropped, us_dropped = apply_sensor_dropoff(
+                xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
+                us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
+                eval_sensor_dropoff,
+                replace_with_nearest
+            )
+            
+            # Add batch dimension back
+            xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
+            us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
+            
+            n_sensors_remaining = xs_used.shape[1]
+            replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
+            dropout_info = f" (Dropout: {eval_sensor_dropoff:.1%}, {n_sensors_remaining}/{n_sensors_orig} sensors, {replacement_mode})"
+            
+        else:  # DeepONet
+            from Data.data_utils import apply_sensor_dropoff_with_2d_interpolation
+            
+            # For Chladni 2D problem, use bilinear interpolation to maintain fixed input size
+            # Chladni uses a 32x32 regular grid (1024 points total)
+            grid_shape = (32, 32)  # Based on numPoints in chladni_plate_generator.py
+            
+            # Apply dropout with bilinear interpolation 
+            _, us_interpolated = apply_sensor_dropoff_with_2d_interpolation(
+                xs.squeeze(0),  # 2D coordinates [n_sensors, 2]
+                us.squeeze(0).squeeze(-1),  # Sensor values [n_sensors]
+                grid_shape,
+                eval_sensor_dropoff
+            )
+            
+            # Keep original sensor locations, use interpolated values
+            xs_used = xs  # (1, n_sensors, 2) - unchanged
+            us_used = us_interpolated.unsqueeze(0).unsqueeze(-1)  # (1, n_sensors, 1)
+            
+            dropout_info = f" (Dropout: {eval_sensor_dropoff:.1%}, bilinear interpolation)"
+    else:
+        us_used = us
     
     # Forward pass
     model.eval()
