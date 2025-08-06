@@ -63,7 +63,7 @@ class DeepONet(nn.Module):
         return out 
 
 class DeepONetWrapper(nn.Module):
-    def __init__(self, branch_input_dim, trunk_input_dim=1, p=32, phi_hidden_size=256, trunk_hidden_size=256, n_trunk_layers=4, branch_hidden_size=256, n_branch_layers=4, activation_fn=nn.ReLU, initial_lr=5e-4, lr_schedule_steps=None, lr_schedule_gammas=None, use_deeponet_bias=True):
+    def __init__(self, branch_input_dim, trunk_input_dim=1, p=32, trunk_hidden_size=256, n_trunk_layers=4, branch_hidden_size=256, n_branch_layers=4, activation_fn=nn.ReLU, initial_lr=5e-4, lr_schedule_steps=None, lr_schedule_gammas=None, use_deeponet_bias=True):
         super().__init__()
         self.branch_input_dim = branch_input_dim
         self.p = p

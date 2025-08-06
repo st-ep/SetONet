@@ -112,6 +112,101 @@ def apply_sensor_dropoff(sensor_x, sensor_values, dropoff_rate, replace_with_nea
         
         return processed_sensor_x, processed_sensor_values
 
+def apply_sensor_dropoff_with_interpolation(sensor_x, sensor_values, dropoff_rate, random_seed=None):
+    """
+    Drops sensors randomly but interpolates missing values to maintain fixed input size.
+    This is specifically designed for DeepONet which requires fixed-size branch input.
+    
+    Args:
+        sensor_x: Sensor locations [n_sensors, coord_dim] (1D coordinates)
+        sensor_values: Sensor values [batch_size, n_sensors] or [n_sensors]
+        dropoff_rate: Fraction of sensors to drop (0.0 to 1.0)
+        random_seed: Optional random seed for reproducibility
+    
+    Returns:
+        Tuple of (original_sensor_x, interpolated_sensor_values)
+        - original_sensor_x: unchanged sensor locations (to maintain fixed size)
+        - interpolated_sensor_values: values with dropped sensors replaced by interpolation
+    """
+    if dropoff_rate == 0.0:
+        return sensor_x, sensor_values
+    
+    device = sensor_x.device
+    n_sensors = sensor_x.shape[0]
+    n_keep = max(1, int(n_sensors * (1.0 - dropoff_rate)))  # Keep at least 1 sensor
+    
+    # Set random seed if provided
+    if random_seed is not None:
+        torch.manual_seed(random_seed)
+    
+    # Randomly select which sensors to keep
+    all_indices = torch.randperm(n_sensors, device=device)
+    keep_indices = all_indices[:n_keep].sort()[0]  # Sort to maintain order
+    drop_indices = all_indices[n_keep:]
+    
+    if len(drop_indices) == 0:
+        return sensor_x, sensor_values
+    
+    # Clone sensor values to avoid modifying input
+    interpolated_values = sensor_values.clone()
+    
+    # Get coordinates for interpolation (assuming 1D sensors)
+    sensor_coords = sensor_x.squeeze(-1)  # [n_sensors] - flatten to 1D coordinates
+    keep_coords = sensor_coords[keep_indices]  # [n_keep]
+    drop_coords = sensor_coords[drop_indices]  # [n_drop]
+    
+    # Helper function for linear interpolation (compatible with older PyTorch versions)
+    def linear_interpolate(x_query, x_known, y_known):
+        """
+        Linear interpolation for a single query point.
+        Args:
+            x_query: single coordinate to interpolate at
+            x_known: [n_known] coordinates of known points (must be sorted)
+            y_known: [n_known] values at known coordinates
+        Returns:
+            interpolated value at x_query
+        """
+        # Handle edge cases
+        if x_query <= x_known[0]:
+            return y_known[0]
+        if x_query >= x_known[-1]:
+            return y_known[-1]
+        
+        # Find the two points to interpolate between
+        idx = torch.searchsorted(x_known, x_query)
+        if idx == 0:
+            idx = 1
+        
+        x0, x1 = x_known[idx-1], x_known[idx]
+        y0, y1 = y_known[idx-1], y_known[idx]
+        
+        # Linear interpolation: y = y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+        weight = (x_query - x0) / (x1 - x0)
+        return y0 + weight * (y1 - y0)
+    
+    if sensor_values.dim() == 1:
+        # Handle 1D sensor values: [n_sensors]
+        keep_values = sensor_values[keep_indices]  # [n_keep]
+        
+        # Interpolate missing values using linear interpolation
+        for i, drop_coord in enumerate(drop_coords):
+            interpolated_val = linear_interpolate(drop_coord, keep_coords, keep_values)
+            interpolated_values[drop_indices[i]] = interpolated_val
+            
+    else:
+        # Handle batched sensor values: [batch_size, n_sensors]
+        keep_values = sensor_values[:, keep_indices]  # [batch_size, n_keep]
+        
+        # Interpolate for each batch item
+        for batch_idx in range(sensor_values.shape[0]):
+            batch_keep_values = keep_values[batch_idx]  # [n_keep]
+            
+            for i, drop_coord in enumerate(drop_coords):
+                interpolated_val = linear_interpolate(drop_coord, keep_coords, batch_keep_values)
+                interpolated_values[batch_idx, drop_indices[i]] = interpolated_val
+    
+    return sensor_x, interpolated_values
+
 def generate_batch(batch_size, n_trunk_points, sensor_x, scale, input_range, device, constant_zero=True, variable_sensors=False, sensor_size=None):
     """
     Generates a batch of polynomial functions and their derivatives.

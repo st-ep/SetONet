@@ -46,7 +46,14 @@ def plot_operator_comparison(
     print(f"📍 Branch sensor locations: {len(branch_input_locations)} total, {unique_branch_locs} unique")
     
     if sensor_dropoff > 0:
-        replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
+        # Detect if this is DeepONet based on calling context
+        import inspect
+        calling_file = inspect.stack()[2].filename if len(inspect.stack()) > 2 else ""
+        
+        if 'DeepONet' in calling_file or 'don' in calling_file:
+            replacement_mode = "interpolation"
+        else:
+            replacement_mode = "nearest neighbor replacement" if replace_with_nearest else "removal"
         print(f"🔧 Applying sensor drop-off rate: {sensor_dropoff:.1%} with {replacement_mode}")
     
     if show_sensor_markers:

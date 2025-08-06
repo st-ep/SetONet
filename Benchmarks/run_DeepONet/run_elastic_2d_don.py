@@ -33,7 +33,6 @@ def parse_arguments():
     
     # Model architecture
     parser.add_argument('--don_p_dim', type=int, default=128, help='Latent dimension p for DeepONet')
-    parser.add_argument('--don_phi_hidden', type=int, default=256, help='Hidden size for DeepONet phi network')
     parser.add_argument('--don_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
     parser.add_argument('--don_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
     parser.add_argument('--don_branch_hidden', type=int, default=128, help='Hidden size for DeepONet branch network')
@@ -93,7 +92,6 @@ def create_model(args, device, branch_input_dim):
         branch_input_dim=branch_input_dim,
         trunk_input_dim=2,  # 2D coordinates
         p=args.don_p_dim,
-        phi_hidden_size=args.don_phi_hidden,
         trunk_hidden_size=args.don_trunk_hidden,
         n_trunk_layers=args.don_n_trunk_layers,
         branch_hidden_size=args.don_branch_hidden,

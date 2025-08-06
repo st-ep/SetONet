@@ -46,6 +46,29 @@ class Synthetic1DDataGenerator:
         self.n_mesh_points = self.n_trunk_points_train  # Number of query points
         self.input_dim = 1  # 1D coordinates
         
+        # Flag to indicate whether to use interpolation for sensor dropout (DeepONet) or removal (SetONet)
+        # This will be set to True only for DeepONet, False or undefined for SetONet
+        # We'll detect this by checking if the script is calling from DeepONet directory
+        import inspect
+        frame = inspect.currentframe()
+        calling_file = ""
+        try:
+            # Walk up the call stack to find the original calling script
+            while frame is not None:
+                if frame.f_code.co_filename.endswith('.py'):
+                    calling_file = frame.f_code.co_filename
+                    if 'run_' in calling_file:  # Found a run script
+                        break
+                frame = frame.f_back
+        finally:
+            del frame
+        
+        # Set interpolation flag based on calling script
+        if 'DeepONet' in calling_file or 'don' in calling_file:
+            self.use_interpolation_for_dropout = True  # DeepONet requires fixed input size
+        else:
+            self.use_interpolation_for_dropout = False  # SetONet can handle variable input size
+        
         if self.variable_sensors:
             print(f"✅ Synthetic 1D generator initialized with VARIABLE sensors ({self.sensor_size} per batch)")
         else:
@@ -111,14 +134,22 @@ class Synthetic1DDataGenerator:
     def evaluate_model(self, model, n_test_samples, batch_size, eval_sensor_dropoff=0.0, replace_with_nearest=False):
         """Evaluate model on synthetic test data."""
         from Models.utils.helper_utils import calculate_l2_relative_error
+        from Data.data_utils import apply_sensor_dropoff_with_interpolation
+        
+
         
         model.eval()
         total_loss = 0.0
         total_rel_error = 0.0
         n_batches = n_test_samples // batch_size
         
+
+        
         with torch.no_grad():
-            for i in range(n_batches):
+            for batch_idx in range(n_batches):
+                # Set deterministic seed for this batch to ensure reproducible evaluation
+                torch.manual_seed(42 + batch_idx)
+                
                 # Generate test batch
                 if self.variable_sensors:
                     batch_data = generate_batch(
@@ -147,23 +178,37 @@ class Synthetic1DDataGenerator:
                     f_at_sensors, f_prime_at_sensors, f_at_trunk, f_prime_at_trunk, batch_x_eval_points = batch_data
                     sensor_x_to_use = self.sensor_x_original
                 
-                # Apply sensor dropout if specified
-                sensor_x_used = sensor_x_to_use
+                # Apply sensor dropout with interpolation if specified (for DeepONet compatibility)
+                sensor_x_used = sensor_x_to_use  # Always keep original sensor locations for fixed-size input
                 f_at_sensors_used = f_at_sensors
+                f_prime_at_sensors_used = f_prime_at_sensors
                 
                 if eval_sensor_dropoff > 0.0:
-                    if self.benchmark == 'derivative':
-                        sensor_x_dropped, f_at_sensors_dropped = apply_sensor_dropoff(
-                            sensor_x_to_use, f_at_sensors, eval_sensor_dropoff, replace_with_nearest
-                        )
-                        sensor_x_used = sensor_x_dropped
-                        f_at_sensors_used = f_at_sensors_dropped
-                    elif self.benchmark == 'integral':
-                        sensor_x_dropped, f_prime_at_sensors_dropped = apply_sensor_dropoff(
-                            sensor_x_to_use, f_prime_at_sensors, eval_sensor_dropoff, replace_with_nearest
-                        )
-                        sensor_x_used = sensor_x_dropped
-                        f_prime_at_sensors = f_prime_at_sensors_dropped
+                    # Check if we should use interpolation (DeepONet) or removal/replacement (SetONet)
+                    if hasattr(self, 'use_interpolation_for_dropout') and self.use_interpolation_for_dropout:
+                        # Use interpolation method for DeepONet (maintains fixed input size)
+                        if self.benchmark == 'derivative':
+                            # For derivative task: input is f, output is f'
+                            _, f_at_sensors_used = apply_sensor_dropoff_with_interpolation(
+                                sensor_x_to_use, f_at_sensors, eval_sensor_dropoff, random_seed=42 + batch_idx
+                            )
+                        elif self.benchmark == 'integral':
+                            # For integral task: input is f', output is f
+                            _, f_prime_at_sensors_used = apply_sensor_dropoff_with_interpolation(
+                                sensor_x_to_use, f_prime_at_sensors, eval_sensor_dropoff, random_seed=42 + batch_idx
+                            )
+                    else:
+                        # Use original removal/replacement method for SetONet (variable input size OK)
+                        from Data.data_utils import apply_sensor_dropoff
+                        
+                        if self.benchmark == 'derivative':
+                            sensor_x_used, f_at_sensors_used = apply_sensor_dropoff(
+                                sensor_x_to_use, f_at_sensors, eval_sensor_dropoff, replace_with_nearest
+                            )
+                        elif self.benchmark == 'integral':
+                            sensor_x_used, f_prime_at_sensors_used = apply_sensor_dropoff(
+                                sensor_x_to_use, f_prime_at_sensors, eval_sensor_dropoff, replace_with_nearest
+                            )
                 
                 # Prepare inputs based on benchmark
                 if self.benchmark == 'derivative':
@@ -173,7 +218,7 @@ class Synthetic1DDataGenerator:
                     target = f_prime_at_trunk.T.unsqueeze(-1)
                 else:  # integral
                     xs = sensor_x_used.unsqueeze(0).expand(batch_size, -1, -1)
-                    us = f_prime_at_sensors.unsqueeze(-1)
+                    us = f_prime_at_sensors_used.unsqueeze(-1)
                     ys = batch_x_eval_points.unsqueeze(0).expand(batch_size, -1, -1)
                     target = f_at_trunk.T.unsqueeze(-1)
                 
@@ -204,9 +249,10 @@ class Synthetic1DDataGenerator:
             dataset_wrapper=self,
             device=self.device,
             eval_frequency=args.tb_eval_frequency,
-            n_test_samples=args.tb_test_samples,
+            n_test_samples=args.n_test_samples_eval,  # Use same sample count as main evaluation
             eval_sensor_dropoff=args.eval_sensor_dropoff,
-            replace_with_nearest=args.replace_with_nearest
+            replace_with_nearest=False,  # DeepONet uses interpolation instead
+            eval_batch_size=args.batch_size  # Use same batch size as main evaluation
         )
         
         print(f"TensorBoard logs will be saved to: {tb_log_dir}")
@@ -291,7 +337,6 @@ def create_synthetic_deeponet_model(args, params, device):
         branch_input_dim=params['sensor_size'],  # Fixed size for branch network input
         trunk_input_dim=1,  # 1D coordinates (x)
         p=args.don_p_dim,
-        phi_hidden_size=args.don_phi_hidden,
         trunk_hidden_size=args.don_trunk_hidden,
         n_trunk_layers=args.don_n_trunk_layers,
         branch_hidden_size=args.don_branch_hidden,

@@ -12,7 +12,7 @@ class TensorBoardCallback:
     """Callback for logging metrics to TensorBoard during training."""
     
     def __init__(self, log_dir, dataset, dataset_wrapper, device, eval_frequency=1000, n_test_samples=100, 
-                 eval_sensor_dropoff=0.0, replace_with_nearest=False):
+                 eval_sensor_dropoff=0.0, replace_with_nearest=False, eval_batch_size=64):
         """
         Initialize TensorBoard callback.
         
@@ -34,10 +34,16 @@ class TensorBoardCallback:
         self.n_test_samples = n_test_samples
         self.eval_sensor_dropoff = eval_sensor_dropoff
         self.replace_with_nearest = replace_with_nearest
+        self.eval_batch_size = eval_batch_size
         
         print(f"TensorBoard logging to: {log_dir}")
         if eval_sensor_dropoff > 0.0:
-            replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
+            # Check if we're using interpolation (DeepONet) or removal/replacement (SetONet)
+            use_interpolation = hasattr(dataset_wrapper, 'use_interpolation_for_dropout') and dataset_wrapper.use_interpolation_for_dropout
+            if use_interpolation:
+                replacement_mode = "interpolation"
+            else:
+                replacement_mode = "nearest replacement" if replace_with_nearest else "removal"
             print(f"Test evaluation with {eval_sensor_dropoff:.1%} sensor dropout ({replacement_mode})")
     
     def on_training_start(self, local_vars):
@@ -68,6 +74,9 @@ class TensorBoardCallback:
         """Called at the end of training."""
         # Final evaluation
         model = local_vars['self']
+        
+
+        
         final_test_rel_l2 = self._evaluate_test_set(model)
         final_step = model.total_steps
         
@@ -87,7 +96,14 @@ class TensorBoardCallback:
             return self._evaluate_with_wrapper(model)
         elif hasattr(self.dataset_wrapper, 'benchmark') and hasattr(self.dataset_wrapper, 'sample'):
             # Use synthetic data generator for evaluation (Synthetic1DDataGenerator style)
-            return self._evaluate_with_synthetic_generator(model)
+            # Use exactly the same function as main evaluation to ensure identical results
+            if hasattr(self.dataset_wrapper, 'evaluate_model'):
+                avg_loss, avg_rel_error = self.dataset_wrapper.evaluate_model(
+                    model, self.n_test_samples, self.eval_batch_size, self.eval_sensor_dropoff, self.replace_with_nearest
+                )
+                return avg_rel_error
+            else:
+                return self._evaluate_with_synthetic_generator(model)
         else:
             # Use direct dataset access for evaluation (Elastic/Chladni style with full point clouds)
             return self._evaluate_with_dataset(model)
@@ -139,13 +155,19 @@ class TensorBoardCallback:
         from Data.data_utils import generate_batch, apply_sensor_dropoff
         
         # Use the same parameters as the dataset wrapper for consistency
-        batch_size = 8  # Small batch size for evaluation
+        # Use the same batch size that main evaluation will use
+        batch_size = self.eval_batch_size
         n_eval_batches = max(1, self.n_test_samples // batch_size)
+        
+
         
         total_rel_error = 0.0
         
         with torch.no_grad():
-            for _ in range(n_eval_batches):
+            for batch_idx in range(n_eval_batches):
+                # Set deterministic seed for this batch to match main evaluation
+                torch.manual_seed(42 + batch_idx)
+                
                 # Generate test batch the same way as in the main evaluation
                 if self.dataset_wrapper.variable_sensors:
                     batch_data = generate_batch(
@@ -159,7 +181,7 @@ class TensorBoardCallback:
                         variable_sensors=True,
                         sensor_size=self.dataset_wrapper.sensor_size
                     )
-                    f_at_sensors, _, f_at_trunk, f_prime_at_trunk, batch_x_eval_points, sensor_x_batch = batch_data
+                    f_at_sensors, f_prime_at_sensors, f_at_trunk, f_prime_at_trunk, batch_x_eval_points, sensor_x_batch = batch_data
                     sensor_x_to_use = sensor_x_batch
                 else:
                     batch_data = generate_batch(
@@ -171,26 +193,46 @@ class TensorBoardCallback:
                         device=self.device,
                         constant_zero=True
                     )
-                    f_at_sensors, _, f_at_trunk, f_prime_at_trunk, batch_x_eval_points = batch_data
+                    f_at_sensors, f_prime_at_sensors, f_at_trunk, f_prime_at_trunk, batch_x_eval_points = batch_data
                     sensor_x_to_use = self.dataset_wrapper.sensor_x_original
                 
                 # Apply sensor dropout if specified
                 sensor_x_used = sensor_x_to_use
                 f_at_sensors_used = f_at_sensors
+                f_prime_at_sensors_used = f_prime_at_sensors
                 
                 if self.eval_sensor_dropoff > 0.0:
-                    if self.dataset_wrapper.benchmark == 'derivative':
-                        sensor_x_dropped, f_at_sensors_dropped = apply_sensor_dropoff(
-                            sensor_x_to_use, f_at_sensors, self.eval_sensor_dropoff, self.replace_with_nearest
-                        )
-                        sensor_x_used = sensor_x_dropped
-                        f_at_sensors_used = f_at_sensors_dropped
-                    elif self.dataset_wrapper.benchmark == 'integral':
-                        batch_x_eval_points_dropped, f_prime_at_trunk_dropped = apply_sensor_dropoff(
-                            batch_x_eval_points, f_prime_at_trunk.T, self.eval_sensor_dropoff, self.replace_with_nearest
-                        )
-                        batch_x_eval_points = batch_x_eval_points_dropped
-                        f_prime_at_trunk = f_prime_at_trunk_dropped.T
+                    # Check if we need to use interpolation (for DeepONet) or removal (for SetONet)
+                    use_interpolation = hasattr(self.dataset_wrapper, 'use_interpolation_for_dropout') and self.dataset_wrapper.use_interpolation_for_dropout
+                    
+                    if use_interpolation:
+                        # Use interpolation method for DeepONet (maintains fixed input size)
+                        from Data.data_utils import apply_sensor_dropoff_with_interpolation
+                        
+                        if self.dataset_wrapper.benchmark == 'derivative':
+                            _, f_at_sensors_used = apply_sensor_dropoff_with_interpolation(
+                                sensor_x_to_use, f_at_sensors, self.eval_sensor_dropoff, random_seed=42 + batch_idx
+                            )
+                            # Keep original sensor locations for fixed input size
+                            sensor_x_used = sensor_x_to_use
+                        elif self.dataset_wrapper.benchmark == 'integral':
+                            _, f_prime_at_sensors_interpolated = apply_sensor_dropoff_with_interpolation(
+                                sensor_x_to_use, f_prime_at_sensors, self.eval_sensor_dropoff, random_seed=42 + batch_idx
+                            )
+                            f_prime_at_sensors = f_prime_at_sensors_interpolated
+                            sensor_x_used = sensor_x_to_use
+                    else:
+                        # Use original removal method for SetONet (variable input size OK)
+                        if self.dataset_wrapper.benchmark == 'derivative':
+                            sensor_x_dropped, f_at_sensors_dropped = apply_sensor_dropoff(
+                                sensor_x_to_use, f_at_sensors, self.eval_sensor_dropoff, self.replace_with_nearest
+                            )
+                            sensor_x_used = sensor_x_dropped
+                            f_at_sensors_used = f_at_sensors_dropped
+                        elif self.dataset_wrapper.benchmark == 'integral':
+                            sensor_x_used, f_prime_at_sensors_used = apply_sensor_dropoff(
+                                sensor_x_to_use, f_prime_at_sensors, self.eval_sensor_dropoff, self.replace_with_nearest
+                            )
                 
                 # Prepare inputs based on benchmark (same logic as main script)
                 if self.dataset_wrapper.benchmark == 'derivative':
@@ -199,10 +241,10 @@ class TensorBoardCallback:
                     ys = batch_x_eval_points.unsqueeze(0).expand(batch_size, -1, -1)
                     target = f_prime_at_trunk.T.unsqueeze(-1)
                 elif self.dataset_wrapper.benchmark == 'integral':
-                    xs = batch_x_eval_points.unsqueeze(0).expand(batch_size, -1, -1)
-                    us = f_prime_at_trunk.T.unsqueeze(-1)
-                    ys = sensor_x_used.unsqueeze(0).expand(batch_size, -1, -1)
-                    target = f_at_sensors_used.unsqueeze(-1)
+                    xs = sensor_x_used.unsqueeze(0).expand(batch_size, -1, -1)
+                    us = f_prime_at_sensors_used.unsqueeze(-1)
+                    ys = batch_x_eval_points.unsqueeze(0).expand(batch_size, -1, -1)
+                    target = f_at_trunk.T.unsqueeze(-1)
                 else:
                     raise ValueError(f"Unknown benchmark: {self.dataset_wrapper.benchmark}")
                 

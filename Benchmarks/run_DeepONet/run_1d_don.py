@@ -11,7 +11,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_pa
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.config_utils_don import save_experiment_configuration
 from Data.synthetic_1d_data import (
     Synthetic1DDataGenerator, get_activation_function,
     create_synthetic_deeponet_model, load_synthetic_pretrained_deeponet_model
@@ -28,11 +28,10 @@ def parse_arguments():
     
     # Model architecture
     parser.add_argument('--don_p_dim', type=int, default=32, help='Latent dimension p for DeepONet')
-    parser.add_argument('--don_phi_hidden', type=int, default=256, help='Hidden size for DeepONet phi network')
     parser.add_argument('--don_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
     parser.add_argument('--don_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
-    parser.add_argument('--don_branch_hidden', type=int, default=256, help='Hidden size for DeepONet branch network')
-    parser.add_argument('--don_n_branch_layers', type=int, default=3, help='Number of layers in DeepONet branch network')
+    parser.add_argument('--don_branch_hidden', type=int, default=128, help='Hidden size for DeepONet branch network')
+    parser.add_argument('--don_n_branch_layers', type=int, default=2, help='Number of layers in DeepONet branch network')
     parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for DeepONet networks')
     
     # Training parameters
@@ -46,14 +45,13 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     
     # Evaluation robustness testing (sensor failures)
-    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing')
-    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them (leverages permutation invariance)')
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0). Simulates sensor failures during testing. Missing sensors are filled via interpolation.')
     parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples for evaluation')
     
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default='cuda:1', help='Torch device to use.')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
@@ -77,14 +75,13 @@ def setup_parameters(args):
     return {
         'input_range': [-1, 1],
         'scale': 0.1,
-        'sensor_size': 250,
+        'sensor_size': 20,
         'batch_size_train': args.batch_size,
         'n_trunk_points_train': 200,
         'n_test_samples_eval': args.n_test_samples_eval,
         'sensor_seed': 42,
         'variable_sensors': args.variable_sensors,
         'eval_sensor_dropoff': args.eval_sensor_dropoff,
-        'replace_with_nearest': args.replace_with_nearest,
     }
 
 def create_sensor_points(params, device):
@@ -117,8 +114,7 @@ def main():
     
     print(f"Running benchmark: {args.benchmark}")
     if args.eval_sensor_dropoff > 0:
-        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
-        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using {replacement_mode}")
+        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using interpolation")
         print("(Training will use full sensor data)")
     
     log_dir = setup_logging(args.benchmark)
@@ -133,6 +129,11 @@ def main():
     
     # Create model
     deeponet_model = create_synthetic_deeponet_model(args, params, device)
+    
+    # Print model info
+    total_params = sum(p.numel() for p in deeponet_model.parameters())
+    trainable_params = sum(p.numel() for p in deeponet_model.parameters() if p.requires_grad)
+    print(f"Model parameters: {total_params:,} (trainable: {trainable_params:,})")
     
     # Load pre-trained model if specified
     model_was_loaded = load_synthetic_pretrained_deeponet_model(deeponet_model, args, device)
@@ -163,8 +164,8 @@ def main():
         deeponet_model, 
         args.n_test_samples_eval, 
         args.batch_size, 
-        args.eval_sensor_dropoff, 
-        args.replace_with_nearest
+        args.eval_sensor_dropoff,
+        replace_with_nearest=False  # DeepONet uses interpolation instead
     )
     print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
     

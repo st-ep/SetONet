@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Configuration utilities for saving experiment configurations to JSON files for DeepONet.
+Configuration utilities for saving DeepONet experiment configurations to JSON files.
 """
 
 import json
@@ -10,7 +10,7 @@ from datetime import datetime
 
 
 def save_experiment_configuration(args, model, dataset, dataset_wrapper, device, log_dir, dataset_type="elastic_2d", test_results=None):
-    """Save model and data configuration to JSON file for DeepONet."""
+    """Save DeepONet model and data configuration to JSON file."""
     # Calculate model parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -32,7 +32,6 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
             "total_parameters": total_params,
             "trainable_parameters": trainable_params,
             "don_p_dim": args.don_p_dim,
-            "don_phi_hidden": args.don_phi_hidden,
             "don_trunk_hidden": args.don_trunk_hidden,
             "don_n_trunk_layers": args.don_n_trunk_layers,
             "don_branch_hidden": args.don_branch_hidden,
@@ -42,6 +41,7 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
             "output_size_src": 1,
             "input_size_tgt": 1 if dataset_type == "darcy_1d" else 2,
             "output_size_tgt": 1,
+            "use_deeponet_bias": True
         },
         
         "training_parameters": {
@@ -58,9 +58,10 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
             "train_samples": train_size,
             "test_samples": test_size,
             "total_samples": train_size + test_size,
+            "variable_sensors": getattr(args, 'variable_sensors', False),
             "train_sensor_dropoff": getattr(args, 'train_sensor_dropoff', 0.0),
             "eval_sensor_dropoff": getattr(args, 'eval_sensor_dropoff', 0.0),
-            "replace_with_nearest": getattr(args, 'replace_with_nearest', False)
+            "sensor_dropoff_method": "interpolation"  # DeepONet uses interpolation for missing sensors
         },
         
         "dataset_structure": {
@@ -83,7 +84,7 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
             "evaluation_timestamp": datetime.now().isoformat(),
             "evaluation_settings": {
                 "eval_sensor_dropoff": getattr(args, 'eval_sensor_dropoff', 0.0),
-                "replace_with_nearest": getattr(args, 'replace_with_nearest', False),
+                "sensor_dropoff_method": "interpolation",
                 "n_test_samples_evaluated": test_results.get("n_test_samples", "unknown")
             }
         }
@@ -94,4 +95,4 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
         json.dump(config, f, indent=2)
     
     print(f"Configuration saved to: {config_path}")
-    return config_path 
+    return config_path

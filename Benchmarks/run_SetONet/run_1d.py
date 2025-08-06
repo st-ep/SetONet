@@ -81,7 +81,7 @@ def setup_parameters(args):
     return {
         'input_range': [-1, 1],
         'scale': 0.1,
-        'sensor_size': 250,
+        'sensor_size': 20,
         'batch_size_train': args.batch_size,
         'n_trunk_points_train': 200,
         'n_test_samples_eval': args.n_test_samples_eval,
