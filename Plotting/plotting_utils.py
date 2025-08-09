@@ -78,18 +78,22 @@ def plot_operator_comparison(
     branch_input_locs_cpu = branch_input_locations.cpu()
     trunk_query_locs_cpu = trunk_query_locations.cpu().squeeze() # Squeeze for 1D plotting
 
-    # Set larger font sizes for better readability
+    # Set larger font sizes for better readability (all to 20 as requested)
     plt.rcParams.update({
-        'font.size': 14,          # Default text size
-        'axes.labelsize': 16,     # X and Y labels
-        'xtick.labelsize': 16,    # X axis tick labels
-        'ytick.labelsize': 16,    # Y axis tick labels
-        'legend.fontsize': 16,    # Legend text (line labels)
+        'font.size': 18,          # Default text size
+        'axes.labelsize': 18,     # X and Y labels
+        'xtick.labelsize': 18,    # X axis tick labels
+        'ytick.labelsize': 18,    # Y axis tick labels
+        'legend.fontsize': 18,    # Legend text (line labels)
         'axes.titlesize': 18      # Title text (not used but set for consistency)
     })
 
     for i in range(num_samples_to_plot):
-        fig, axs = plt.subplots(1, 2, figsize=(14, 6), squeeze=False)
+        # Use constrained layout and make each subplot square
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=True, squeeze=False)
+        for ax in axs.ravel():
+            ax.set_box_aspect(1)  # enforce square axes
+            ax.margins(x=0.01, y=0.02)  # reduce internal padding around data
 
         # Generate coefficients using the SAME method as training data
         # Use torch.rand instead of torch.randn to match training distribution
@@ -214,13 +218,14 @@ def plot_operator_comparison(
         axs[0, 1].grid(True, alpha=0.3)
         axs[0, 1].legend()
 
-        plt.tight_layout()
+        # Fine-tune constrained layout padding to minimize outer whitespace
+        fig.set_constrained_layout_pads(w_pad=0.02, h_pad=0.02, wspace=0.02, hspace=0.02)
         
         # Save plot
         replacement_suffix = "_nearest" if replace_with_nearest and sensor_dropoff > 0 else ""
         dropoff_suffix = f"_dropoff_{sensor_dropoff:.1f}{replacement_suffix}" if sensor_dropoff > 0 else ""
         save_path = os.path.join(log_dir, f"{plot_filename_prefix}{task_type_str}_sample_{i+1}{dropoff_suffix}.png")
-        plt.savefig(save_path)
+        fig.savefig(save_path, bbox_inches='tight', pad_inches=0.02)
         print(f"Saved {task_type_str} plot for sample {i+1} to {save_path}")
         plt.close(fig)
 
