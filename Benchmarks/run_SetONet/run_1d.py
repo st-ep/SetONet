@@ -57,7 +57,7 @@ def parse_arguments():
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default='cuda:1', help='Torch device to use.')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
@@ -81,11 +81,11 @@ def setup_parameters(args):
     return {
         'input_range': [-1, 1],
         'scale': 0.1,
-        'sensor_size': 20,
+        'sensor_size': 100,
         'batch_size_train': args.batch_size,
         'n_trunk_points_train': 200,
         'n_test_samples_eval': args.n_test_samples_eval,
-        'sensor_seed': 42,
+        'sensor_seed': args.seed,
         'variable_sensors': args.variable_sensors,
         'eval_sensor_dropoff': args.eval_sensor_dropoff,
         'replace_with_nearest': args.replace_with_nearest,
@@ -128,9 +128,16 @@ def main():
     log_dir = setup_logging(args.benchmark)
     params = setup_parameters(args)
     
-    # Set random seed
+    # Set random seed and ensure reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)  # For multi-GPU setups
+    
+    # For better reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # Create sensor points
     sensor_x_original = create_sensor_points(params, device)
@@ -176,7 +183,7 @@ def main():
     test_results = data_generator.prepare_test_results(avg_loss, avg_rel_error, args.n_test_samples_eval)
     
     # Generate plots
-    plot_synthetic_1d_comparison(setonet_model, data_generator, params, log_dir, args, show_sensor_markers=True)
+    plot_synthetic_1d_comparison(setonet_model, data_generator, params, log_dir, args, show_sensor_markers=False)
     
     # Save model
     if not model_was_loaded:

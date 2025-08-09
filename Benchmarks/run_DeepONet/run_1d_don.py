@@ -31,7 +31,7 @@ def parse_arguments():
     parser.add_argument('--don_trunk_hidden', type=int, default=256, help='Hidden size for DeepONet trunk network')
     parser.add_argument('--don_n_trunk_layers', type=int, default=4, help='Number of layers in DeepONet trunk network')
     parser.add_argument('--don_branch_hidden', type=int, default=128, help='Hidden size for DeepONet branch network')
-    parser.add_argument('--don_n_branch_layers', type=int, default=2, help='Number of layers in DeepONet branch network')
+    parser.add_argument('--don_n_branch_layers', type=int, default=3, help='Number of layers in DeepONet branch network')
     parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for DeepONet networks')
     
     # Training parameters
@@ -75,11 +75,11 @@ def setup_parameters(args):
     return {
         'input_range': [-1, 1],
         'scale': 0.1,
-        'sensor_size': 20,
+        'sensor_size': 100,
         'batch_size_train': args.batch_size,
         'n_trunk_points_train': 200,
         'n_test_samples_eval': args.n_test_samples_eval,
-        'sensor_seed': 42,
+        'sensor_seed': args.seed,
         'variable_sensors': args.variable_sensors,
         'eval_sensor_dropoff': args.eval_sensor_dropoff,
     }
@@ -120,9 +120,16 @@ def main():
     log_dir = setup_logging(args.benchmark)
     params = setup_parameters(args)
     
-    # Set random seed
+    # Set random seed and ensure reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)  # For multi-GPU setups
+    
+    # For better reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # Create sensor points
     sensor_x_original = create_sensor_points(params, device)
@@ -173,7 +180,7 @@ def main():
     test_results = data_generator.prepare_test_results(avg_loss, avg_rel_error, args.n_test_samples_eval)
     
     # Generate plots
-    plot_synthetic_1d_comparison(deeponet_model, data_generator, params, log_dir, args, show_sensor_markers=True)
+    plot_synthetic_1d_comparison(deeponet_model, data_generator, params, log_dir, args, show_sensor_markers=False)
     
     # Save model
     if not model_was_loaded:

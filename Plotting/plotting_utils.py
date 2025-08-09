@@ -171,17 +171,10 @@ def plot_operator_comparison(
             axs[0, 0].scatter(sensor_x_subset, sensor_y_subset, c='red', s=50, zorder=5, 
                              label=f'Sensors (every {sensor_step}th, {len(sensor_indices)} shown)')
         
-        # Count unique sensor locations
+        # Count unique sensor locations (keeping for potential future use)
         unique_sensors = len(torch.unique(branch_input_locs_plot.squeeze(), dim=0))
         
-        # Add text box with sensor info
-        sensor_info = f'Total sensors: {actual_n_sensors}\nUnique locations: {unique_sensors}'
-        if sensor_dropoff > 0:
-            original_sensors = len(branch_input_locations) if sensor_dropoff > 0 else actual_n_sensors
-            sensor_info += f'\nOriginal: {original_sensors} (dropoff: {sensor_dropoff:.1%})'
-        
-        axs[0, 0].text(0.02, 0.98, sensor_info, transform=axs[0, 0].transAxes, 
-                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        # Sensor info text box removed per user request
         
         axs[0, 0].set_xlabel('$x$')
         axs[0, 0].set_ylabel(plot_ylabel_left)

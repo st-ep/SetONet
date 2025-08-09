@@ -155,9 +155,16 @@ def main():
     log_dir = setup_logging()
     params = setup_parameters(args)
     
-    # Set random seed
+    # Set random seed and ensure reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)  # For multi-GPU setups
+    
+    # For better reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # Create sensor and query points
     sensor_x, sensor_indices = create_sensor_points(params, device, grid_points)
