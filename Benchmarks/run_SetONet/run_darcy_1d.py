@@ -29,7 +29,7 @@ def parse_arguments():
     # Data parameters
     parser.add_argument('--data_path', type=str, default="Data/darcy_1d_data/darcy_1d_dataset_501", 
                        help='Path to Darcy 1D dataset')
-    parser.add_argument('--sensor_size', type=int, default=301, help='Number of sensor locations (max 501 for Darcy 1D grid)')
+    parser.add_argument('--sensor_size', type=int, default=300, help='Number of sensor locations (max 501 for Darcy 1D grid)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
@@ -56,11 +56,12 @@ def parse_arguments():
     parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors')
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0)')
     parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples for evaluation')
-    parser.add_argument('--n_query_points', type=int, default=301, help='Number of query points for evaluation')
+    parser.add_argument('--n_query_points', type=int, default=300, help='Number of query points for evaluation')
     
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
@@ -142,7 +143,7 @@ def load_pretrained_model(setonet_model, args, device):
 def main():
     """Main training function."""
     args = parse_arguments()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(args.device)
     print(f"Using device: {device}")
     
     # Add benchmark argument for compatibility

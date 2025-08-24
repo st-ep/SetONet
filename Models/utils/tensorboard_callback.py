@@ -4,6 +4,7 @@ TensorBoard callback for logging training and evaluation metrics during SetONet 
 """
 
 import torch
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from .helper_utils import calculate_l2_relative_error
 
@@ -55,19 +56,16 @@ class TensorBoardCallback:
         step = local_vars['self'].total_steps
         loss = local_vars['loss']
         rel_l2_error = local_vars['rel_l2_error']
-        current_lr = local_vars['current_lr']
-        grad_norm = local_vars['norm']
         
         # Log training metrics
         self.writer.add_scalar('Training/MSE_Loss', loss.item(), step)
         self.writer.add_scalar('Training/Relative_L2_Error', rel_l2_error.item(), step)
-        self.writer.add_scalar('Training/Learning_Rate', current_lr, step)
-        self.writer.add_scalar('Training/Gradient_Norm', grad_norm, step)
         
         # Evaluate on test set periodically
         if step % self.eval_frequency == 0 and step > 0:
             model = local_vars['self']
-            test_rel_l2 = self._evaluate_test_set(model)
+            test_mse_loss, test_rel_l2 = self._evaluate_test_set(model)
+            self.writer.add_scalar('Evaluation/Test_MSE_Loss', test_mse_loss, step)
             self.writer.add_scalar('Evaluation/Test_Relative_L2_Error', test_rel_l2, step)
     
     def on_training_end(self, local_vars):
@@ -77,17 +75,19 @@ class TensorBoardCallback:
         
 
         
-        final_test_rel_l2 = self._evaluate_test_set(model)
+        final_test_mse_loss, final_test_rel_l2 = self._evaluate_test_set(model)
         final_step = model.total_steps
         
-        self.writer.add_scalar('Evaluation/Final_Test_Relative_L2_Error', final_test_rel_l2, final_step)
-        print(f"Final Test Relative L2 Error: {final_test_rel_l2:.6f}")
+        # Log only the requested evaluation metrics
+        self.writer.add_scalar('Evaluation/Test_MSE_Loss', final_test_mse_loss, final_step)
+        self.writer.add_scalar('Evaluation/Test_Relative_L2_Error', final_test_rel_l2, final_step)
+        print(f"Final Test - MSE Loss: {final_test_mse_loss:.6e}, Relative L2 Error: {final_test_rel_l2:.6f}")
         
         self.writer.close()
         print("TensorBoard logging completed.")
     
     def _evaluate_test_set(self, model):
-        """Evaluate model on test set and return average relative L2 error."""
+        """Evaluate model on test set and return (avg_mse_loss, avg_relative_L2_error)."""
         model.eval()
         
         # Check if this is a Darcy-style dataset (has sensor/query indices for subsampling)
@@ -101,7 +101,7 @@ class TensorBoardCallback:
                 avg_loss, avg_rel_error = self.dataset_wrapper.evaluate_model(
                     model, self.n_test_samples, self.eval_batch_size, self.eval_sensor_dropoff, self.replace_with_nearest
                 )
-                return avg_rel_error
+                return avg_loss, avg_rel_error
             else:
                 return self._evaluate_with_synthetic_generator(model)
         else:
@@ -115,6 +115,7 @@ class TensorBoardCallback:
         n_test = min(self.n_test_samples, len(test_data))
         
         total_rel_error = 0.0
+        total_mse_loss = 0.0
         
         with torch.no_grad():
             for i in range(n_test):
@@ -146,9 +147,12 @@ class TensorBoardCallback:
                 # Calculate relative error
                 rel_error = calculate_l2_relative_error(pred, target)
                 total_rel_error += rel_error.item()
+                # Calculate MSE loss
+                mse_loss = F.mse_loss(pred, target)
+                total_mse_loss += mse_loss.item()
         
                 model.train()
-        return total_rel_error / n_test 
+        return total_mse_loss / n_test, total_rel_error / n_test 
     
     def _evaluate_with_synthetic_generator(self, model):
         """Evaluate using synthetic data generator (for synthetic 1D benchmarks)."""
@@ -162,6 +166,7 @@ class TensorBoardCallback:
 
         
         total_rel_error = 0.0
+        total_mse_loss = 0.0
         
         with torch.no_grad():
             for batch_idx in range(n_eval_batches):
@@ -254,9 +259,12 @@ class TensorBoardCallback:
                 # Calculate relative error for this batch
                 rel_error = calculate_l2_relative_error(pred.squeeze(-1), target.squeeze(-1))
                 total_rel_error += rel_error.item()
+                # Calculate MSE loss for this batch
+                mse_loss = F.mse_loss(pred.squeeze(-1), target.squeeze(-1))
+                total_mse_loss += mse_loss.item()
         
         model.train()
-        return total_rel_error / n_eval_batches
+        return total_mse_loss / n_eval_batches, total_rel_error / n_eval_batches
     
     def _evaluate_with_dataset(self, model):
         """Evaluate using direct dataset access (elastic/chladni style)."""
@@ -264,6 +272,7 @@ class TensorBoardCallback:
         n_test = min(self.n_test_samples, len(test_data))
         
         total_rel_error = 0.0
+        total_mse_loss = 0.0
         
         with torch.no_grad():
             for i in range(n_test):
@@ -306,6 +315,9 @@ class TensorBoardCallback:
                 # Calculate relative error
                 rel_error = calculate_l2_relative_error(pred_norm, target)
                 total_rel_error += rel_error.item()
+                # Calculate MSE loss
+                mse_loss = F.mse_loss(pred_norm, target)
+                total_mse_loss += mse_loss.item()
         
         model.train()
-        return total_rel_error / n_test 
+        return total_mse_loss / n_test, total_rel_error / n_test 

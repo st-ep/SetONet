@@ -29,7 +29,7 @@ def parse_arguments():
     # Data parameters
     parser.add_argument('--data_path', type=str, default="Data/darcy_1d_data/darcy_1d_dataset_501", 
                        help='Path to Darcy 1D dataset')
-    parser.add_argument('--sensor_size', type=int, default=301, help='Number of sensor locations (max 501 for Darcy 1D grid)')
+    parser.add_argument('--sensor_size', type=int, default=300, help='Number of sensor locations (max 501 for Darcy 1D grid)')
     
     # Model architecture
     parser.add_argument('--don_p_dim', type=int, default=32, help='Latent dimension p for DeepONet')
@@ -41,7 +41,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
-    parser.add_argument('--don_epochs', type=int, default=25000, help='Number of epochs for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
@@ -50,11 +50,12 @@ def parse_arguments():
     parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation (0.0-1.0) using interpolation')
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0)')
     parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples for evaluation')
-    parser.add_argument('--n_query_points', type=int, default=301, help='Number of query points for evaluation')
+    parser.add_argument('--n_query_points', type=int, default=300, help='Number of query points for evaluation')
     
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
@@ -125,7 +126,7 @@ def load_pretrained_model(model, args, device):
 def main():
     """Main training function."""
     args = parse_arguments()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(args.device)
     print(f"Using device: {device}")
     
     # Validate arguments

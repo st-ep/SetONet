@@ -33,7 +33,7 @@ class Darcy1DSolver:
     
     def generate_source_term(self, n_samples=1):
         """Generate random source term from GP prior"""
-        sigma = 0.08
+        sigma = 0.008
         gamma = 1 / (2 * sigma**2)
         
         random_function = self.sample_gp_prior(
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     ds = ds.train_test_split(test_size=test_size, shuffle=False)
     
     # Save dataset with updated name to distinguish from 101-point version
-    dataset_path = os.path.join(save_dir, "darcy_1d_dataset_501")
+    dataset_path = os.path.join(save_dir, "darcy_1d_dataset_501_sigma_0.008")
     ds.save_to_disk(dataset_path)
     
     print(f"Dataset created successfully!")

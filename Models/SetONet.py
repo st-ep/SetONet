@@ -54,11 +54,11 @@ class SetONet(torch.nn.Module):
         self.n_trunk_layers = n_trunk_layers
 
         # ---------------------------------------------------------------------
-        # Aggregation choice ('mean' | 'attention')
+        # Aggregation choice ('mean' | 'sum' | 'attention')
         # ---------------------------------------------------------------------
         self.aggregation = aggregation_type.lower()
-        if self.aggregation not in ["mean", "attention"]:
-            raise ValueError("aggregation_type must be either 'mean' or 'attention'")
+        if self.aggregation not in ["mean", "sum", "attention"]:
+            raise ValueError("aggregation_type must be one of 'mean', 'sum', or 'attention'")
         self.attention_n_tokens = attention_n_tokens
         self.attention_n_heads = 4 # Default or make configurable if needed
 
@@ -240,6 +240,8 @@ class SetONet(torch.nn.Module):
         # ---- Aggregation over sensors ---------------------------------------
         if self.aggregation == "mean":
             aggregated = torch.mean(phi_output_reshaped, dim=1)            # (B, dφ)
+        elif self.aggregation == "sum":
+            aggregated = torch.sum(phi_output_reshaped, dim=1)             # (B, dφ)
         elif self.aggregation == "attention": # Ensure this covers all valid cases
             aggregated = self.pool(phi_output_reshaped)                    # (B, dφ)
         else:

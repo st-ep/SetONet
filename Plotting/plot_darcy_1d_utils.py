@@ -91,10 +91,10 @@ def plot_darcy_comparison(
             
             # Apply dropout to sensor data
             sensor_x_dropped, u_sensors_dropped = apply_sensor_dropoff(
-                sensor_x.squeeze(), u_sensors, sensor_dropoff, replace_with_nearest
+                sensor_x, u_sensors, sensor_dropoff, replace_with_nearest
             )
             
-            sensor_x_plot = sensor_x_dropped.cpu()
+            sensor_x_plot = sensor_x_dropped.squeeze().cpu()
             u_sensors_plot = u_sensors_dropped.cpu()
             sensor_x_model = sensor_x_dropped.unsqueeze(0)  # Add batch dim
             u_sensors_model = u_sensors_dropped.unsqueeze(0).unsqueeze(-1)  # [1, n_sensors, 1]

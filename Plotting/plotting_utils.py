@@ -116,16 +116,16 @@ def plot_operator_comparison(
             branch_values_true = f_true(branch_input_locs_cpu) # f(x_i)
             operator_output_true = df_true(trunk_query_locs_cpu) # f'(y_j)
             
-            plot_ylabel_left = '$f(x)$'
-            plot_ylabel_right = '$f\'(x)$'
+            plot_ylabel_left = r'$f(x)$'
+            plot_ylabel_right = r'$f^{\prime}(x)$'
             task_type_str = "derivative"
             
         else: # Inverse task: f' -> f (integral benchmark)
             branch_values_true = df_true(branch_input_locs_cpu) # f'(x_i)
             operator_output_true = f_true(trunk_query_locs_cpu) # f(y_j)
             
-            plot_ylabel_left = '$f\'(x)$'
-            plot_ylabel_right = '$f(x)$'
+            plot_ylabel_left = r'$f^{\prime}(x)$'
+            plot_ylabel_right = r'$f(x)$'
             task_type_str = "integral"
 
         # Convert to numpy for plotting
@@ -218,8 +218,8 @@ def plot_operator_comparison(
         axs[0, 1].grid(True, alpha=0.3)
         axs[0, 1].legend()
 
-        # Fine-tune constrained layout padding to minimize outer whitespace
-        fig.set_constrained_layout_pads(w_pad=0.02, h_pad=0.02, wspace=0.02, hspace=0.02)
+        # Tighten spacing specifically 
+        fig.set_constrained_layout_pads(w_pad=0.01, h_pad=0.02, wspace=0.005, hspace=0.01)
         
         # Save plot
         replacement_suffix = "_nearest" if replace_with_nearest and sensor_dropoff > 0 else ""
