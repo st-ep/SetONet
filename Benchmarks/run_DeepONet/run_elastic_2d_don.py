@@ -41,7 +41,7 @@ def parse_arguments():
     
     # Training parameters
     parser.add_argument('--don_lr', type=float, default=5e-4, help='Learning rate for DeepONet')
-    parser.add_argument('--don_epochs', type=int, default=25000, help='Number of epochs for DeepONet')
+    parser.add_argument('--don_epochs', type=int, default=125000, help='Number of epochs for DeepONet')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for DeepONet')
     parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')

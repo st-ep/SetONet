@@ -51,8 +51,9 @@ def parse_arguments():
     parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation only (0.0-1.0) using bilinear interpolation. Simulates sensor failures during testing')
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0). Makes model more robust to sensor failures')
     
-    # GPU selection
-    parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use (0, 1, etc.). If not specified, uses CUDA_VISIBLE_DEVICES or auto-detects')
+    # Random seed and device
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging of training metrics')
@@ -179,8 +180,19 @@ def main():
     """Main training function."""
     # Parse arguments and setup
     args = parse_arguments()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(args.device)
     print(f"Using device: {device}")
+    
+    # Set random seed and ensure reproducibility
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)  # For multi-GPU setups
+    
+    # For better reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # Validate arguments
     if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
