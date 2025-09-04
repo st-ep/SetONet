@@ -4,6 +4,7 @@ TensorBoard callback for logging training and evaluation metrics during SetONet 
 """
 
 import torch
+import numpy as np
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from .helper_utils import calculate_l2_relative_error
@@ -278,18 +279,43 @@ class TensorBoardCallback:
             for i in range(n_test):
                 sample = test_data[i]
                 
-                # Load pre-normalized data
-                xs_norm = torch.tensor(sample['X'], dtype=torch.float32, device=self.device)
-                xs = xs_norm.unsqueeze(0)
-                
-                us_norm = torch.tensor(sample['u'], dtype=torch.float32, device=self.device).unsqueeze(0)
-                us = us_norm.unsqueeze(-1)
-                
-                ys_norm = torch.tensor(sample['Y'], dtype=torch.float32, device=self.device)
-                ys = ys_norm.unsqueeze(0)
-                
-                target_norm = torch.tensor(sample['s'], dtype=torch.float32, device=self.device).unsqueeze(0)
-                target = target_norm.unsqueeze(-1)
+                # Check if this is Dynamic Chladni dataset (has 'sources' and 'field' keys)
+                if 'sources' in sample and 'field' in sample:
+                    # Dynamic Chladni dataset format
+                    # Extract data from the raw sample (already normalized)
+                    sources = np.array(sample['sources'])  # (n_forces, 3) - [x_norm, y_norm, force_mag_normalized]
+                    displacement_field = np.array(sample['field'])  # (grid_size, grid_size, 1) - normalized
+                    
+                    # Get grid size from the dataset wrapper if available
+                    grid_size = getattr(self.dataset_wrapper, 'grid_size', 64)
+                    
+                    # Create grid coordinates (normalized [0,1])
+                    x = np.linspace(0.0, 1.0, grid_size)
+                    y = np.linspace(0.0, 1.0, grid_size)
+                    xx, yy = np.meshgrid(x, y, indexing='ij')
+                    grid_coords = np.stack([xx, yy], axis=-1)  # (grid_size, grid_size, 2)
+                    
+                    # Convert to tensors and add batch dimension
+                    xs = torch.tensor(sources[:, :2], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_forces, 2)
+                    us = torch.tensor(sources[:, 2:3], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_forces, 1)
+                    
+                    # Flatten grid coordinates and displacement field
+                    ys = torch.tensor(grid_coords.reshape(-1, 2), dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_grid_points, 2)
+                    target = torch.tensor(displacement_field[:, :, 0].flatten(), dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)  # (1, n_grid_points, 1)
+                else:
+                    # Elastic dataset format (original code)
+                    # Load pre-normalized data
+                    xs_norm = torch.tensor(sample['X'], dtype=torch.float32, device=self.device)
+                    xs = xs_norm.unsqueeze(0)
+                    
+                    us_norm = torch.tensor(sample['u'], dtype=torch.float32, device=self.device).unsqueeze(0)
+                    us = us_norm.unsqueeze(-1)
+                    
+                    ys_norm = torch.tensor(sample['Y'], dtype=torch.float32, device=self.device)
+                    ys = ys_norm.unsqueeze(0)
+                    
+                    target_norm = torch.tensor(sample['s'], dtype=torch.float32, device=self.device).unsqueeze(0)
+                    target = target_norm.unsqueeze(-1)
                 
                 # Apply sensor dropout if specified
                 xs_used = xs

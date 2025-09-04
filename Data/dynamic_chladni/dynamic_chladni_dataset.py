@@ -8,17 +8,28 @@ from __future__ import annotations
 import numpy as np
 import torch
 from datasets import load_from_disk
+import json
+import os
 
 class DynamicChladniDataset:
     """Dataset wrapper for Dynamic Chladni plate data with point cloud forces."""
     
-    def __init__(self, dataset, batch_size=64, device='cuda'):
+    def __init__(self, dataset, batch_size=64, device='cuda', normalization_stats_path=None):
         print("Loading Dynamic Chladni dataset...")
         
         self.batch_size = batch_size
         self.device = device
         train_data = dataset['train']
         self.n_samples = len(train_data)
+        
+        # Load normalization statistics if available
+        self.normalization_stats = None
+        if normalization_stats_path and os.path.exists(normalization_stats_path):
+            with open(normalization_stats_path, 'r') as f:
+                self.normalization_stats = json.load(f)
+                print(f"Loaded normalization statistics from {normalization_stats_path}")
+                print(f"  Force normalization: mean={self.normalization_stats['force_mean']:.6f}, std={self.normalization_stats['force_std']:.6f}")
+                print(f"  Displacement normalization: mean={self.normalization_stats['displacement_mean']:.6f}, std={self.normalization_stats['displacement_std']:.6f}")
         
         # Get grid size from first sample
         sample_0 = train_data[0]
@@ -67,6 +78,35 @@ class DynamicChladniDataset:
             print(f"  - Force count range: {min(all_force_counts)} to {max(all_force_counts)}")
         if all_force_mags:
             print(f"  - Force magnitude range: {min(all_force_mags):.4f} to {max(all_force_mags):.4f}")
+    
+    def denormalize_displacement(self, displacement_norm):
+        """Denormalize displacement values back to physical units (meters)."""
+        if self.normalization_stats is None:
+            return displacement_norm
+        
+        mean = self.normalization_stats['displacement_mean']
+        std = self.normalization_stats['displacement_std']
+        return displacement_norm * std + mean
+    
+    def denormalize_force(self, force_norm):
+        """Denormalize force values back to physical units (Newtons)."""
+        if self.normalization_stats is None:
+            return force_norm
+        
+        mean = self.normalization_stats['force_mean']
+        std = self.normalization_stats['force_std']
+        return force_norm * std + mean
+    
+    def denormalize_coordinates(self, coords_norm):
+        """Denormalize coordinates back to physical units (meters)."""
+        if self.normalization_stats is None:
+            # If no normalization stats, assume [0,1] maps to plate dimensions
+            L = 8.75 * 0.0254  # meters
+            return coords_norm * L
+        
+        mean = torch.tensor(self.normalization_stats['coord_mean'], device=coords_norm.device, dtype=coords_norm.dtype)
+        std = torch.tensor(self.normalization_stats['coord_std'], device=coords_norm.device, dtype=coords_norm.dtype)
+        return coords_norm * std + mean
     
     def sample(self, device=None):
         """Sample a batch for training."""
@@ -169,8 +209,17 @@ def load_dynamic_chladni_dataset(data_path="Data/dynamic_chladni/dynamic_chladni
         dataset = load_from_disk(data_path)
         print(f"Dataset loaded: {len(dataset['train'])} train, {len(dataset['test'])} test samples")
         
-        # Create dataset wrapper
-        chladni_dataset = DynamicChladniDataset(dataset, batch_size=batch_size, device=device)
+        # Check for normalization statistics file
+        data_dir = os.path.dirname(data_path) if os.path.isabs(data_path) else os.path.dirname(os.path.abspath(data_path))
+        normalization_stats_path = os.path.join(data_dir, 'dynamic_chladni_normalization_stats.json')
+        
+        # Create dataset wrapper with normalization stats if available
+        chladni_dataset = DynamicChladniDataset(
+            dataset, 
+            batch_size=batch_size, 
+            device=device,
+            normalization_stats_path=normalization_stats_path if os.path.exists(normalization_stats_path) else None
+        )
         
         return dataset, chladni_dataset
     except Exception as e:

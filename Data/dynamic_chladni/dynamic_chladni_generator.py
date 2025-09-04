@@ -17,6 +17,34 @@ from scipy.integrate import quad
 from datasets import Dataset, Features, Sequence, Value, Array3D
 from tqdm import tqdm
 import argparse
+import json
+import os
+
+def normalize_data(data, axis=None):
+    """
+    Normalize data to zero mean and unit variance.
+    
+    Args:
+        data: numpy array to normalize
+        axis: axis along which to compute statistics (None for global stats)
+    
+    Returns:
+        normalized_data: normalized array
+        mean: mean values used for normalization
+        std: standard deviation values used for normalization
+    """
+    if axis is None:
+        mean = np.mean(data)
+        std = np.std(data)
+    else:
+        mean = np.mean(data, axis=axis, keepdims=True)
+        std = np.std(data, axis=axis, keepdims=True)
+    
+    # Avoid division by zero
+    std = np.where(std < 1e-8, 1.0, std)
+    normalized_data = (data - mean) / std
+    
+    return normalized_data, mean.squeeze() if hasattr(mean, 'squeeze') else mean, std.squeeze() if hasattr(std, 'squeeze') else std
 
 def precompute_chladni_modal_params(
     L: float, M: float, omega: float, t_fixed: float, 
@@ -189,8 +217,11 @@ def make_record(
         "field": displacement_grid,  # displacement field (grid_n, grid_n, 1)
     }
 
-def build_dataset(num_samples: int, **kwargs) -> Dataset:
-    """Stream-based builder to keep memory usage low."""
+def build_dataset(num_samples: int, compute_normalization: bool = True, **kwargs) -> tuple:
+    """
+    Build dataset with optional normalization.
+    Returns: (dataset, normalization_stats)
+    """
     
     # Precompute modal parameters once for all samples
     modal_params = precompute_chladni_modal_params(
@@ -198,13 +229,80 @@ def build_dataset(num_samples: int, **kwargs) -> Dataset:
         gamma=kwargs['gamma'], v=kwargs['v'], n_max=kwargs['n_max'], m_max=kwargs['m_max']
     )
     
+    print(f"Generating {num_samples} samples...")
+    
+    # First, generate all samples to compute normalization statistics
+    all_samples = []
+    rng = np.random.default_rng(kwargs.get("seed", None))
+    
+    for _ in tqdm(range(num_samples), desc="Generating samples"):
+        record_kwargs = {k: v for k, v in kwargs.items() if k not in ['omega', 't_fixed', 'gamma', 'v', 'n_max', 'm_max', 'seed']}
+        record_kwargs['modal_params'] = modal_params
+        sample = make_record(rng=rng, **record_kwargs)
+        all_samples.append(sample)
+    
+    normalization_stats = None
+    
+    if compute_normalization:
+        print("Computing normalization statistics...")
+        
+        # Collect all force magnitudes and displacements
+        all_forces = []
+        all_displacements = []
+        
+        for sample in all_samples:
+            forces = np.array(sample['sources'])[:, 2]  # Get force magnitudes
+            all_forces.extend(forces.tolist())
+            
+            field = sample['field']
+            all_displacements.extend(field.flatten().tolist())
+        
+        # Compute normalization statistics
+        forces_array = np.array(all_forces)
+        displacements_array = np.array(all_displacements)
+        
+        force_mean = float(np.mean(forces_array))
+        force_std = float(np.std(forces_array))
+        force_std = force_std if force_std > 1e-8 else 1.0
+        
+        displacement_mean = float(np.mean(displacements_array))
+        displacement_std = float(np.std(displacements_array))
+        displacement_std = displacement_std if displacement_std > 1e-8 else 1.0
+        
+        # Coordinates are already in [0,1], compute their stats
+        coord_mean = [0.5, 0.5]  # Center of [0,1]^2
+        coord_std = [0.2887, 0.2887]  # std of uniform distribution on [0,1]
+        
+        normalization_stats = {
+            "force_mean": force_mean,
+            "force_std": force_std,
+            "displacement_mean": displacement_mean,
+            "displacement_std": displacement_std,
+            "coord_mean": coord_mean,
+            "coord_std": coord_std
+        }
+        
+        print(f"Normalization statistics computed:")
+        print(f"  Forces: mean={force_mean:.6f}, std={force_std:.6f}")
+        print(f"  Displacements: mean={displacement_mean:.6f}, std={displacement_std:.6f}")
+        
+        # Apply normalization to all samples
+        print("Applying normalization...")
+        for sample in all_samples:
+            # Normalize forces
+            sources = np.array(sample['sources'])
+            sources[:, 2] = (sources[:, 2] - force_mean) / force_std
+            sample['sources'] = sources.tolist()
+            
+            # Normalize displacements
+            field = sample['field']
+            field = (field - displacement_mean) / displacement_std
+            sample['field'] = field
+    
+    # Create dataset from normalized samples
     def _gen():
-        rng = np.random.default_rng(kwargs.pop("seed", None))
-        for _ in tqdm(range(num_samples), desc="samples"):
-            # Pass modal_params to make_record
-            record_kwargs = {k: v for k, v in kwargs.items() if k not in ['omega', 't_fixed', 'gamma', 'v', 'n_max', 'm_max']}
-            record_kwargs['modal_params'] = modal_params
-            yield make_record(rng=rng, **record_kwargs)
+        for sample in all_samples:
+            yield sample
     
     # Define features
     features = Features(
@@ -213,7 +311,9 @@ def build_dataset(num_samples: int, **kwargs) -> Dataset:
             "field": Array3D(shape=(kwargs["grid_n"], kwargs["grid_n"], 1), dtype="float32"),
         }
     )
-    return Dataset.from_generator(_gen, features=features)
+    
+    dataset = Dataset.from_generator(_gen, features=features)
+    return dataset, normalization_stats
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Dynamic Chladni dataset with point cloud forces.")
@@ -224,8 +324,8 @@ def main():
     # Force distribution
     parser.add_argument("--n_forces", type=int, default=10, help="Number of forces (constant)")
     parser.add_argument("--constant_force", action="store_true", help="Set all force magnitudes = 1")
-    parser.add_argument("--force_min", type=float, default=0.01, help="Min force magnitude")
-    parser.add_argument("--force_max", type=float, default=0.05, help="Max force magnitude")
+    parser.add_argument("--force_min", type=float, default=0.1, help="Min force magnitude")
+    parser.add_argument("--force_max", type=float, default=0.5, help="Max force magnitude")
     
     # Physical parameters
     parser.add_argument("--L", type=float, default=8.75 * 0.0254, help="Plate length (m)")
@@ -264,7 +364,9 @@ def main():
         seed=args.seed,
     )
     
-    dataset_path = "Data/dynamic_chladni/dynamic_chladni_dataset"
+    # Get the directory path for saving
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    dataset_path = os.path.join(current_dir, "dynamic_chladni_dataset")
     
     # Calculate total samples needed
     total_samples = args.train + args.test
@@ -279,12 +381,19 @@ def main():
     print(f"    - Physical dimensions: {args.L:.4f}m × {args.M:.4f}m")
     print(f"    - Frequency: {args.omega:.2f} rad/s")
     
-    # Generate full dataset
-    full_ds = build_dataset(total_samples, **params)
+    # Generate full dataset with normalization
+    full_ds, normalization_stats = build_dataset(total_samples, compute_normalization=True, **params)
     
     print("[•] Splitting into train/test sets...")
     # Split dataset
     ds = full_ds.train_test_split(test_size=args.test, shuffle=False)
+    
+    # Save normalization statistics
+    if normalization_stats:
+        normalization_stats_path = os.path.join(current_dir, 'dynamic_chladni_normalization_stats.json')
+        with open(normalization_stats_path, 'w') as f:
+            json.dump(normalization_stats, f, indent=2)
+        print(f"[•] Normalization statistics saved to: {normalization_stats_path}")
     
     print("[•] Saving dataset...")
     ds.save_to_disk(dataset_path)
