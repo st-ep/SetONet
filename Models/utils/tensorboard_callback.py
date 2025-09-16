@@ -279,30 +279,66 @@ class TensorBoardCallback:
             for i in range(n_test):
                 sample = test_data[i]
                 
-                # Check if this is Dynamic Chladni dataset (has 'sources' and 'field' keys)
-                if 'sources' in sample and 'field' in sample:
-                    # Dynamic Chladni dataset format
-                    # Extract data from the raw sample (already normalized)
-                    sources = np.array(sample['sources'])  # (n_forces, 3) - [x_norm, y_norm, force_mag_normalized]
-                    displacement_field = np.array(sample['field'])  # (grid_size, grid_size, 1) - normalized
+                # Check dataset format by keys present
+                if 'sources' in sample:
+                    # Handle datasets with sources (Heat, Concentration, Transport, Chladni)
+                    sources = np.array(sample['sources'])
                     
-                    # Get grid size from the dataset wrapper if available
-                    grid_size = getattr(self.dataset_wrapper, 'grid_size', 64)
+                    if 'grid_coords' in sample and 'field_values' in sample:
+                        # Heat/Concentration adaptive mesh format
+                        xs = torch.tensor(sources[:, :2], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_sources, 2)
+                        us = torch.tensor(sources[:, 2:3], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_sources, 1)
+                        
+                        ys = torch.tensor(np.array(sample['grid_coords']), dtype=torch.float32, device=self.device).unsqueeze(0)
+                        target = torch.tensor(np.array(sample['field_values']), dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)
+                        
+                    elif 'field' in sample:
+                        # Heat/Concentration uniform mesh or Chladni format
+                        xs = torch.tensor(sources[:, :2], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_sources, 2)
+                        us = torch.tensor(sources[:, 2:3], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_sources, 1)
+                        
+                        field = np.array(sample['field'])
+                        
+                        if hasattr(self.dataset_wrapper, 'grid_coords'):
+                            # Uniform mesh with pre-computed grid coords (Heat/Concentration)
+                            ys = self.dataset_wrapper.grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+                            target = torch.tensor(field[:, :, 0].flatten(), dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)
+                        else:
+                            # Chladni format - need to create grid
+                            grid_size = getattr(self.dataset_wrapper, 'grid_size', 64)
+                            x = np.linspace(0.0, 1.0, grid_size)
+                            y = np.linspace(0.0, 1.0, grid_size)
+                            xx, yy = np.meshgrid(x, y, indexing='ij')
+                            grid_coords = np.stack([xx, yy], axis=-1)
+                            
+                            ys = torch.tensor(grid_coords.reshape(-1, 2), dtype=torch.float32, device=self.device).unsqueeze(0)
+                            target = torch.tensor(field[:, :, 0].flatten(), dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)
                     
-                    # Create grid coordinates (normalized [0,1])
-                    x = np.linspace(0.0, 1.0, grid_size)
-                    y = np.linspace(0.0, 1.0, grid_size)
-                    xx, yy = np.meshgrid(x, y, indexing='ij')
-                    grid_coords = np.stack([xx, yy], axis=-1)  # (grid_size, grid_size, 2)
+                    elif 'source_points' in sample and 'velocity_field' in sample:
+                        # Transport dataset format
+                        source_points = torch.tensor(np.array(sample['source_points']), device=self.device, dtype=torch.float32)
+                        velocity_field = torch.tensor(np.array(sample['velocity_field']), device=self.device, dtype=torch.float32)
+                        grid_coords = torch.tensor(np.array(sample['grid_coords']), device=self.device, dtype=torch.float32)
+                        
+                        xs = source_points.unsqueeze(0)  # (1, n_sources, 2)
+                        us = torch.ones(1, source_points.shape[0], 1, device=self.device, dtype=torch.float32)  # (1, n_sources, 1)
+                        ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+                        target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
+                    else:
+                        raise ValueError(f"Unknown dataset format with 'sources' key. Available keys: {list(sample.keys())}")
                     
-                    # Convert to tensors and add batch dimension
-                    xs = torch.tensor(sources[:, :2], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_forces, 2)
-                    us = torch.tensor(sources[:, 2:3], dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_forces, 1)
+                elif 'source_points' in sample and 'velocity_field' in sample:
+                    # Transport dataset format (alternative structure)
+                    source_points = torch.tensor(np.array(sample['source_points']), device=self.device, dtype=torch.float32)
+                    velocity_field = torch.tensor(np.array(sample['velocity_field']), device=self.device, dtype=torch.float32)
+                    grid_coords = torch.tensor(np.array(sample['grid_coords']), device=self.device, dtype=torch.float32)
                     
-                    # Flatten grid coordinates and displacement field
-                    ys = torch.tensor(grid_coords.reshape(-1, 2), dtype=torch.float32, device=self.device).unsqueeze(0)  # (1, n_grid_points, 2)
-                    target = torch.tensor(displacement_field[:, :, 0].flatten(), dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)  # (1, n_grid_points, 1)
-                else:
+                    xs = source_points.unsqueeze(0)  # (1, n_sources, 2)
+                    us = torch.ones(1, source_points.shape[0], 1, device=self.device, dtype=torch.float32)  # (1, n_sources, 1)
+                    ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+                    target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
+                    
+                elif 'X' in sample and 'u' in sample and 'Y' in sample and 's' in sample:
                     # Elastic dataset format (original code)
                     # Load pre-normalized data
                     xs_norm = torch.tensor(sample['X'], dtype=torch.float32, device=self.device)
@@ -316,6 +352,8 @@ class TensorBoardCallback:
                     
                     target_norm = torch.tensor(sample['s'], dtype=torch.float32, device=self.device).unsqueeze(0)
                     target = target_norm.unsqueeze(-1)
+                else:
+                    raise ValueError(f"Unknown dataset format. Available keys: {list(sample.keys())}")
                 
                 # Apply sensor dropout if specified
                 xs_used = xs

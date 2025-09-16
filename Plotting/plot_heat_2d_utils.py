@@ -125,9 +125,9 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
                   cmap='viridis', edgecolors='white', linewidth=2)
     
     # ax.set_title('Prediction')
-    ax.set_xlabel('X position', fontsize=18)
-    ax.set_ylabel('Y position', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)
+    ax.set_xlabel('X position', fontsize=16)
+    ax.set_ylabel('Y position', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
@@ -142,9 +142,9 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
                   cmap='viridis', edgecolors='white', linewidth=2)
     
     # ax.set_title('Ground Truth')
-    ax.set_xlabel('X position', fontsize=18)
-    ax.set_ylabel('Y position', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)
+    ax.set_xlabel('X position', fontsize=16)
+    ax.set_ylabel('Y position', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
@@ -159,9 +159,9 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
                   edgecolors='white', linewidth=2, alpha=0.7)
     
     # ax.set_title('Absolute Error')
-    ax.set_xlabel('X position', fontsize=18)
-    ax.set_ylabel('Y position', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)
+    ax.set_xlabel('X position', fontsize=16)
+    ax.set_ylabel('Y position', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
@@ -191,6 +191,7 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
     temp_cbar = fig.colorbar(im2, cax=cbar_ax1)
     temp_cbar.set_label('Temperature', rotation=270, labelpad=20, fontsize=16)
     temp_cbar.ax.tick_params(labelsize=16)
+    temp_cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.2f}'))
 
     # Absolute-error colorbar – right of Error subplot
     left_err = pos_err.x1 + gap_cb + 0.0 # place immediately after Error axis
@@ -199,6 +200,7 @@ def plot_heat_results(model, dataset, heat_dataset, device, sample_idx=0, save_p
     err_cbar = fig.colorbar(im3, cax=cbar_ax2)
     err_cbar.set_label('|Error|', rotation=270, labelpad=20, fontsize=16)
     err_cbar.ax.tick_params(labelsize=16)
+    err_cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.2f}'))
 
     # Redraw the canvas to ensure everything renders correctly
     fig.canvas.draw()

@@ -147,9 +147,9 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     # Wind direction is fixed at +x direction (0 radians) for all samples
     
     # ax.set_title('Prediction')
-    ax.set_xlabel('X position', fontsize=18)
-    ax.set_ylabel('Y position', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)
+    ax.set_xlabel('X position', fontsize=16)
+    ax.set_ylabel('Y position', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
@@ -170,9 +170,9 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     # Wind direction is fixed at +x direction (0 radians) for all samples
     
     # ax.set_title('Ground Truth')
-    ax.set_xlabel('X position', fontsize=18)
-    ax.set_ylabel('Y position', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)
+    ax.set_xlabel('X position', fontsize=16)
+    ax.set_ylabel('Y position', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     
@@ -192,9 +192,9 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
     # Wind direction is fixed at +x direction (0 radians) for all samples
     
     # ax.set_title('Absolute Error')
-    ax.set_xlabel('X position', fontsize=18)
-    ax.set_ylabel('Y position', fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)
+    ax.set_xlabel('X position', fontsize=16)
+    ax.set_ylabel('Y position', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     # ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     

@@ -15,6 +15,8 @@ if project_root not in sys.path:
 from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
+from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.concentration_data.concentration_2d_dataset import load_concentration_dataset
 from Plotting.plot_consentration_2d_utils import plot_concentration_results
 
@@ -49,6 +51,15 @@ def parse_arguments():
     
     # Model loading
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    
+    # Random seed and device
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
+    
+    # TensorBoard logging
+    parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging of training metrics')
+    parser.add_argument('--tb_eval_frequency', type=int, default=1000, help='How often to evaluate on test set for TensorBoard logging (in steps)')
+    parser.add_argument('--tb_test_samples', type=int, default=100, help='Number of test samples to use for TensorBoard evaluation')
     
     return parser.parse_args()
 
@@ -153,8 +164,19 @@ def main():
     """Main training function."""
     # Parse arguments and setup
     args = parse_arguments()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(args.device)
     print(f"Using device: {device}")
+    
+    # Set random seed and ensure reproducibility
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)  # For multi-GPU setups
+    
+    # For better reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # Setup logging
     log_dir = setup_logging(project_root)
@@ -182,6 +204,24 @@ def main():
         print(f"Loading pre-trained model from: {args.load_model_path}")
         model.load_state_dict(torch.load(args.load_model_path, map_location=device))
     
+    # Setup TensorBoard callback if enabled
+    callback = None
+    if args.enable_tensorboard:
+        print("Setting up TensorBoard logging...")
+        tb_log_dir = os.path.join(log_dir, "tensorboard")
+        callback = TensorBoardCallback(
+            log_dir=tb_log_dir,
+            dataset=dataset,
+            dataset_wrapper=concentration_dataset,
+            device=device,
+            eval_frequency=args.tb_eval_frequency,
+            n_test_samples=args.tb_test_samples,
+            eval_sensor_dropoff=0.0,  # No sensor dropout for Concentration
+            replace_with_nearest=False
+        )
+        print(f"TensorBoard logs will be saved to: {tb_log_dir}")
+        print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
+    
     # Train model
     print(f"\nStarting training for {args.son_epochs} epochs...")
     
@@ -189,12 +229,19 @@ def main():
         dataset=concentration_dataset,
         epochs=args.son_epochs,
         progress_bar=True,
-        callback=None
+        callback=callback
     )
     
     # Evaluate model
     print("\nEvaluating model...")
-    evaluate_model(model, dataset, concentration_dataset, device, n_test_samples=100)
+    avg_loss, avg_rel_error = evaluate_model(model, dataset, concentration_dataset, device, n_test_samples=100)
+    
+    # Prepare test results for configuration saving
+    test_results = {
+        "relative_l2_error": avg_rel_error,
+        "mse_loss": avg_loss,
+        "n_test_samples": 100
+    }
     
     # Plot results
     print("Generating plots...")
@@ -209,6 +256,9 @@ def main():
         plot_save_path = os.path.join(log_dir, f"concentration_results_train_sample_{i}.png")
         plot_concentration_results(model, dataset, concentration_dataset, device, sample_idx=i, 
                                  save_path=plot_save_path, dataset_split="train")
+    
+    # Save experiment configuration with test results
+    save_experiment_configuration(args, model, dataset, concentration_dataset, device, log_dir, dataset_type="concentration_2d", test_results=test_results)
     
     # Save model
     model_save_path = os.path.join(log_dir, "concentration2d_setonet_model.pth")
