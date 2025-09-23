@@ -86,16 +86,15 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     divider1 = make_axes_locatable(ax1)
     cax1 = divider1.append_axes("right", size="5%", pad=0.05)
     cbar1 = plt.colorbar(im1, cax=cax1, label='Velocity Magnitude')
-    cbar1.set_label('Velocity Magnitude', fontsize=16)
-    cbar1.ax.tick_params(labelsize=14)
+    cbar1.set_label('Velocity Magnitude', fontsize=18)
+    cbar1.ax.tick_params(labelsize=18)
     
     ax1.set_xlim(xx.min(), xx.max())
     ax1.set_ylim(yy.min(), yy.max())
-    ax1.set_xlabel('x', fontsize=16)
-    ax1.set_ylabel('y', fontsize=16)
-    ax1.set_title(f'Ground Truth\n({dataset_split.title()} Sample {sample_idx+1})', fontsize=16)
+    ax1.set_xlabel('x', fontsize=18)
+    ax1.set_ylabel('y', fontsize=18)
     ax1.set_aspect('equal')
-    ax1.tick_params(axis='both', which='major', labelsize=14)
+    ax1.tick_params(axis='both', which='major', labelsize=18)
     
     # Plot 2: Prediction (ONLY magnitude, no vectors)
     ax2 = axes[1]
@@ -105,16 +104,15 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     divider2 = make_axes_locatable(ax2)
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
     cbar2 = plt.colorbar(im2, cax=cax2, label='Velocity Magnitude')
-    cbar2.set_label('Velocity Magnitude', fontsize=16)
-    cbar2.ax.tick_params(labelsize=14)
+    cbar2.set_label('Velocity Magnitude', fontsize=18)
+    cbar2.ax.tick_params(labelsize=18)
     
     ax2.set_xlim(xx.min(), xx.max())
     ax2.set_ylim(yy.min(), yy.max())
-    ax2.set_xlabel('x', fontsize=16)
-    ax2.set_ylabel('y', fontsize=16)
-    ax2.set_title(f'Prediction\n({dataset_split.title()} Sample {sample_idx+1})', fontsize=16)
+    ax2.set_xlabel('x', fontsize=18)
+    ax2.set_ylabel('y', fontsize=18)
     ax2.set_aspect('equal')
-    ax2.tick_params(axis='both', which='major', labelsize=14)
+    ax2.tick_params(axis='both', which='major', labelsize=18)
     
     # Plot 3: Absolute Error
     ax3 = axes[2]
@@ -124,29 +122,18 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     divider3 = make_axes_locatable(ax3)
     cax3 = divider3.append_axes("right", size="5%", pad=0.05)
     cbar3 = plt.colorbar(im3, cax=cax3, label='Error Magnitude')
-    cbar3.set_label('Error Magnitude', fontsize=16)
-    cbar3.ax.tick_params(labelsize=14)
+    cbar3.set_label('Error Magnitude', fontsize=18)
+    cbar3.ax.tick_params(labelsize=18)
     
     ax3.set_xlim(xx.min(), xx.max())
     ax3.set_ylim(yy.min(), yy.max())
-    ax3.set_xlabel('x', fontsize=16)
-    ax3.set_ylabel('y', fontsize=16)
-    ax3.set_title(f'Absolute Error\n({dataset_split.title()} Sample {sample_idx+1})', fontsize=16)
+    ax3.set_xlabel('x', fontsize=18)
+    ax3.set_ylabel('y', fontsize=18)
     ax3.set_aspect('equal')
-    ax3.tick_params(axis='both', which='major', labelsize=14)
+    ax3.tick_params(axis='both', which='major', labelsize=18)
     
     plt.tight_layout()
-    
-    # Calculate and display metrics
-    mse_loss = np.mean((V_pred - V_gt)**2)
-    mae_loss = np.mean(np.abs(V_pred - V_gt))
-    max_error = np.max(V_error_mag)
-    
-    # Add text box with metrics
-    metrics_text = f'MSE: {mse_loss:.2e}\nMAE: {mae_loss:.2e}\nMax Error: {max_error:.2e}'
-    fig.text(0.02, 0.98, metrics_text, fontsize=10, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
+
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Saved transport results plot to {save_path}")
@@ -245,12 +232,11 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     
     ax1.set_xlim(xlim)
     ax1.set_ylim(ylim)
-    ax1.set_xlabel('x', fontsize=16)
-    ax1.set_ylabel('y', fontsize=16)
-    ax1.set_title('Predicted Velocity Vectors', fontsize=16)
+    ax1.set_xlabel('x', fontsize=18)
+    ax1.set_ylabel('y', fontsize=18)
     ax1.set_aspect('equal')
     ax1.grid(True, alpha=0.3)
-    ax1.tick_params(axis='both', which='major', labelsize=14)
+    ax1.tick_params(axis='both', which='major', labelsize=18)
     
     # Plot 2: Ground Truth Velocity Vectors (ONLY vectors, no magnitude)
     ax2 = axes[1]
@@ -262,12 +248,11 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     
     ax2.set_xlim(xlim)
     ax2.set_ylim(ylim)
-    ax2.set_xlabel('x', fontsize=16)
-    ax2.set_ylabel('y', fontsize=16)
-    ax2.set_title('Ground Truth Velocity Vectors', fontsize=16)
+    ax2.set_xlabel('x', fontsize=18)
+    ax2.set_ylabel('y', fontsize=18)
     ax2.set_aspect('equal')
     ax2.grid(True, alpha=0.3)
-    ax2.tick_params(axis='both', which='major', labelsize=14)
+    ax2.tick_params(axis='both', which='major', labelsize=18)
     
     # Plot 3: Predicted Transport Map
     ax3 = axes[2]
@@ -287,13 +272,12 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     
     ax3.set_xlim(xlim)
     ax3.set_ylim(ylim)
-    ax3.set_xlabel('x', fontsize=16)
-    ax3.set_ylabel('y', fontsize=16)
-    ax3.set_title('Predicted Transport Map', fontsize=16)
-    ax3.legend(fontsize=14)
+    ax3.set_xlabel('x', fontsize=18)
+    ax3.set_ylabel('y', fontsize=18)
+    ax3.legend(fontsize=18)
     ax3.grid(True, alpha=0.3)
     ax3.set_aspect('equal')
-    ax3.tick_params(axis='both', which='major', labelsize=14)
+    ax3.tick_params(axis='both', which='major', labelsize=18)
     
     # Plot 4: Ground Truth Transport Map
     ax4 = axes[3]
@@ -311,13 +295,12 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     
     ax4.set_xlim(xlim)
     ax4.set_ylim(ylim)
-    ax4.set_xlabel('x', fontsize=16)
-    ax4.set_ylabel('y', fontsize=16)
-    ax4.set_title('Ground Truth Transport Map', fontsize=16)
-    ax4.legend(fontsize=14)
+    ax4.set_xlabel('x', fontsize=18)
+    ax4.set_ylabel('y', fontsize=18)
+    ax4.legend(fontsize=18)
     ax4.grid(True, alpha=0.3)
     ax4.set_aspect('equal')
-    ax4.tick_params(axis='both', which='major', labelsize=14)
+    ax4.tick_params(axis='both', which='major', labelsize=18)
     
     plt.tight_layout()
     

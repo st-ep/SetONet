@@ -11,41 +11,34 @@ import torch
 from pathlib import Path
 from matplotlib.gridspec import GridSpec  # re-import for custom spacing
 from scipy.interpolate import griddata
+from matplotlib.patches import FancyArrowPatch
 
 def add_wind_arrow(ax, wind_angle):
     """Add wind direction arrow to plot."""
     # Calculate arrow start and end points based on wind direction
-    arrow_length = 0.1  # length of arrow in axes coordinates
+    arrow_length = 0.2  # length of arrow in axes coordinates (increased from 0.1)
     center_x, center_y = 0.9, 0.95  # center position of arrow
-    
+
     # Wind direction: 0 = +x, π/2 = +y, π = -x, 3π/2 = -y
     wind_x = np.cos(wind_angle)
     wind_y = np.sin(wind_angle)
-    
+
     start_x = center_x - arrow_length/2 * wind_x
     start_y = center_y - arrow_length/2 * wind_y
     end_x = center_x + arrow_length/2 * wind_x
     end_y = center_y + arrow_length/2 * wind_y
-    
-    ax.annotate('', xy=(end_x, end_y), xytext=(start_x, start_y),
-                arrowprops=dict(arrowstyle='->', lw=2, color='red'),
-                transform=ax.transAxes)
-    
-    # Wind direction label
-    wind_deg = np.degrees(wind_angle) % 360
-    if wind_deg == 0:
-        wind_label = 'Wind (+x)'
-    elif wind_deg == 90:
-        wind_label = 'Wind (+y)'
-    elif wind_deg == 180:
-        wind_label = 'Wind (-x)'
-    elif wind_deg == 270:
-        wind_label = 'Wind (-y)'
-    else:
-        wind_label = f'Wind ({wind_deg:.0f}°)'
-    
-    ax.text(center_x, center_y + 0.03, wind_label, transform=ax.transAxes, 
-            ha='center', va='bottom', color='red', fontweight='bold', fontsize=8)
+
+    # Create arrow using FancyArrowPatch
+    arrow = FancyArrowPatch(
+        (start_x, start_y), (end_x, end_y),
+        arrowstyle='->',
+        lw=5,
+        color='deepskyblue',
+        mutation_scale=30,  # Size of arrow head
+        transform=ax.transAxes,
+        zorder=10
+    )
+    ax.add_patch(arrow)
 
 def plot_concentration_results(model, dataset, concentration_dataset, device, sample_idx=0, save_path=None, dataset_split="test"):
     """
