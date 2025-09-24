@@ -121,9 +121,12 @@ def evaluate_model(model, dataset, transport_dataset, device, n_test_samples=100
     model.eval()
     test_data = dataset['test']
     n_test = min(n_test_samples, len(test_data))
-    
+
     total_loss = 0.0
     total_rel_error = 0.0
+    total_cv_error_x = 0.0
+    total_cv_error_y = 0.0
+    total_cv_error_magnitude = 0.0
     
     with torch.no_grad():
         for i in range(n_test):
@@ -149,14 +152,43 @@ def evaluate_model(model, dataset, transport_dataset, device, n_test_samples=100
             
             rel_error = calculate_l2_relative_error(pred.reshape(pred.shape[0], -1), target_velocity.reshape(target_velocity.shape[0], -1))
             total_rel_error += rel_error.item()
+
+            # Calculate Coefficient of Variation (CV) errors
+            # Use source points standard deviation for normalization
+            source_std_x = source_points[:, 0].std().item()
+            source_std_y = source_points[:, 1].std().item()
+
+            # Mean velocity fields
+            pred_mean_x = pred[0, :, 0].mean().item()
+            pred_mean_y = pred[0, :, 1].mean().item()
+            gt_mean_x = target_velocity[0, :, 0].mean().item()
+            gt_mean_y = target_velocity[0, :, 1].mean().item()
+
+            # CV error for x and y components
+            cv_error_x = abs(pred_mean_x - gt_mean_x) / (source_std_x + 1e-8)  # Add small epsilon to avoid division by zero
+            cv_error_y = abs(pred_mean_y - gt_mean_y) / (source_std_y + 1e-8)
+
+            # CV error for magnitude
+            pred_mean_mag = np.sqrt(pred_mean_x**2 + pred_mean_y**2)
+            gt_mean_mag = np.sqrt(gt_mean_x**2 + gt_mean_y**2)
+            source_std_mag = np.sqrt(source_std_x**2 + source_std_y**2)
+            cv_error_magnitude = abs(pred_mean_mag - gt_mean_mag) / (source_std_mag + 1e-8)
+
+            total_cv_error_x += cv_error_x
+            total_cv_error_y += cv_error_y
+            total_cv_error_magnitude += cv_error_magnitude
     
     avg_loss = total_loss / n_test
     avg_rel_error = total_rel_error / n_test
-    
+    avg_cv_error_x = total_cv_error_x / n_test
+    avg_cv_error_y = total_cv_error_y / n_test
+    avg_cv_error_magnitude = total_cv_error_magnitude / n_test
+
     print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
-    
+    print(f"CV Errors - X: {avg_cv_error_x:.6f}, Y: {avg_cv_error_y:.6f}, Magnitude: {avg_cv_error_magnitude:.6f}")
+
     model.train()
-    return avg_loss, avg_rel_error
+    return avg_loss, avg_rel_error, avg_cv_error_x, avg_cv_error_y, avg_cv_error_magnitude
 
 def main():
     """Main training function."""
@@ -233,12 +265,16 @@ def main():
     
     # Evaluate model
     print("\nEvaluating model...")
-    avg_loss, avg_rel_error = evaluate_model(model, dataset, transport_dataset, device, n_test_samples=100)
-    
+    avg_loss, avg_rel_error, avg_cv_error_x, avg_cv_error_y, avg_cv_error_magnitude = evaluate_model(
+        model, dataset, transport_dataset, device, n_test_samples=100)
+
     # Prepare test results for configuration saving
     test_results = {
         "relative_l2_error": avg_rel_error,
         "mse_loss": avg_loss,
+        "cv_error_x": avg_cv_error_x,
+        "cv_error_y": avg_cv_error_y,
+        "cv_error_magnitude": avg_cv_error_magnitude,
         "n_test_samples": 100
     }
     

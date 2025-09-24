@@ -88,6 +88,9 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
         config["evaluation_results"] = {
             "test_relative_l2_error": test_results.get("relative_l2_error"),
             "test_mse_loss": test_results.get("mse_loss"),
+            "test_cv_error_x": test_results.get("cv_error_x"),
+            "test_cv_error_y": test_results.get("cv_error_y"),
+            "test_cv_error_magnitude": test_results.get("cv_error_magnitude"),
             "evaluation_timestamp": datetime.now().isoformat(),
             "evaluation_settings": {
                 "eval_sensor_dropoff": getattr(args, 'eval_sensor_dropoff', 0.0),

@@ -177,6 +177,8 @@ Thumbs.db
 *.mat
 *.0
 *.npy
+*.sh
+*.run
 
 # Your specific log directory
 logs/
