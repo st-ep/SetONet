@@ -6,8 +6,8 @@ This repository provides SetONet and baseline DeepONet implementations, dataset 
 
 
 ## Highlights
-- Deep Sets branch with attention pooling (Set Transformer–style PMA) for expressive, permutation-invariant aggregation
-- Standard DeepONet-style trunk and synthesis (elementwise product + sum over latent basis)
+- Deep Sets branch with attention pooling for expressive, permutation-invariant aggregation
+- Standard DeepONet-style trunk
 - Sinusoidal positional encoding for spatial awareness at multiple scales
 - Lightweight, parameter-matched design vs. DeepONet baseline
 - Benchmarks: 1D calculus operators, 1D Darcy flow, 2D elastic plate, 2D heat with point sources, 2D advection–diffusion (chemical plume), 2D optimal transport
@@ -19,7 +19,11 @@ This repository provides SetONet and baseline DeepONet implementations, dataset 
   - Heat 2D (adaptive/uniform)
   - Elastic Plate 2D
   - Optimal Transport 2D
-  - Other Benchmarks
+  - Concentration 2D (advection–diffusion)
+  - Darcy 1D
+  - Chladni 2D
+  - Dynamic Chladni
+  - 1D Calculus Operators
 - Training & Evaluation
 - Plotting
 - Configuration Reference
@@ -68,85 +72,25 @@ TensorBoard logs and figures are written under `logs/`.
 
 ## Datasets
 
-This repo uses HuggingFace `datasets`-style on-disk datasets for fast I/O. Each benchmark ships a generator/loader pair.
+SetONet uses HuggingFace `datasets`-style on-disk datasets. Each benchmark has a generator and loader.
 
-### Heat 2D (point sources)
-- Generator: `Data/heat_data/generate_heat_2d_data.py`
-- Loader/Wrapper: `Data/heat_data/heat_2d_dataset.py`
-- Datasets can be:
-  - Uniform grid: identical query grid for all samples
-  - Adaptive grid: per-sample query sets concentrated near steep gradients (auto-detected by loader)
+| Benchmark | Generator | Loader | Run Script |
+|-----------|-----------|--------|------------|
+| Heat 2D (point sources) | `Data/heat_data/generate_heat_2d_data.py` | `Data/heat_data/heat_2d_dataset.py` | `Benchmarks/run_SetONet/run_heat_2d.py` |
+| Elastic Plate 2D | `Data/elastic_2d_data/get_elastic_data.py` | `Data/elastic_2d_data/elastic_2d_dataset.py` | `Benchmarks/run_SetONet/run_elastic_2d.py` |
+| Optimal Transport 2D | `Data/transport_data/generate_transport_data.py` | `Data/transport_data/transport_dataset.py` | `Benchmarks/run_SetONet/run_transoprt.py` |
+| Concentration 2D (advection–diffusion) | `Data/concentration_data/generate_concentration_2d_data.py` | `Data/concentration_data/concentration_2d_dataset.py` | `Benchmarks/run_SetONet/run_consantration_2d.py` |
+| Darcy 1D | `Data/darcy_1d_data/darcy_1d_data.py` | `Data/darcy_1d_data/darcy_1d_dataset.py` | `Benchmarks/run_SetONet/run_darcy_1d.py` |
+| Chladni 2D | `Data/chladni_data/chladni_plate_generator.py` | `Data/chladni_data/chladni_2d_dataset.py` | `Benchmarks/run_SetONet/run_chladni_2d.py` |
+| Dynamic Chladni | `Data/dynamic_chladni/dynamic_chladni_generator.py` | `Data/dynamic_chladni/dynamic_chladni_dataset.py` | `Benchmarks/run_SetONet/run_dynamic_chladni.py` |
+| 1D Calculus Operators | `Data/synthetic_1d_data.py` | (inline sampling) | `Benchmarks/run_SetONet/run_1d.py` |
 
-Generate adaptive dataset (example):
-
-```
-python Data/heat_data/generate_heat_2d_data.py \
-  --mode adaptive \
-  --n_train 10000 --n_test 1000 \
-  --n_points 8192 \
-  --spike_focus 9.0 \
-  --sources_min 10 --sources_max 30 \
-  --out_dir Data/heat_data/pcb_heat_adaptive_dataset9.0_n8192_N25_P10
-```
-
-Then train SetONet on it:
-
-```
-python Benchmarks/run_SetONet/run_heat_2d.py \
-  --device cuda:0 \
-  --data_path Data/heat_data/pcb_heat_adaptive_dataset9.0_n8192_N25_P10
-```
-
-Notes:
-- The loader will auto-detect adaptive meshes via the presence of `grid_coords` and `field_values` in samples.
-- Uniform datasets expose `field` on a shared grid; the loader synthesizes per-sample `grid_coords` internally.
-
-
-### Elastic Plate 2D (FEM)
-- Downloader/Processor: `Data/elastic_2d_data/get_elastic_data.py`
-- Loader/Wrapper: `Data/elastic_2d_data/elastic_2d_dataset.py`
-
-Steps:
-
-```
-# Download/process to Data/elastic_2d_data/elastic_dataset
-python Data/elastic_2d_data/get_elastic_data.py
-
-# Train SetONet (uses pre-normalized tensors on GPU)
-python Benchmarks/run_SetONet/run_elastic_2d.py --device cuda:0
-```
-
-Optional robustness settings (leverages permutation invariance):
-
-```
---train_sensor_dropoff 0.2           # apply sensor dropout during training
---eval_sensor_dropoff 0.2            # apply sensor dropout only at evaluation
---replace_with_nearest               # replace dropped sensors by nearest retained ones (keeps size)
-```
-
-
-### Optimal Transport 2D
-- Generator: `Data/transport_data/generate_transport_data.py`
-- Loader/Wrapper: `Data/transport_data/transport_dataset.py`
-
-Generate dataset and train in velocity-field mode:
-
-```
-python Data/transport_data/generate_transport_data.py \
-  --out_dir Data/transport_data/transport_dataset
-
-python Benchmarks/run_SetONet/run_transoprt.py \
-  --device cuda:0 \
-  --data_path Data/transport_data/transport_dataset \
-  --mode velocity_field
-```
-
-Other modes: `transport_map`, `density_transport` (see loader).
-
-
-### Other Benchmarks
-- 1D calculus operators (derivative / anti-derivative), 1D Darcy flow, 2D Chladni, 2D advection–diffusion are supported by scripts and dataset utilities under `Benchmarks/` and `Data/`.
-- For advection–diffusion ("concentration") see `Benchmarks/run_SetONet/run_consantration_2d.py` and the plotting utility `Plotting/plot_consentration_2d_utils.py`.
+Quick tips:
+- Heat 2D datasets can be uniform-grid or adaptive (auto-detected).
+- Elastic 2D loader preloads pre-normalized tensors to GPU; `--train_sensor_dropoff` and `--replace_with_nearest` improve robustness.
+- Optimal transport loader supports `velocity_field`, `transport_map`, and `density_transport` modes.
+- The concentration (chemical plume) generator mirrors the heat setup but uses advection–diffusion physics.
+- Plotting utilities for each benchmark reside in `Plotting/` (e.g., `plot_heat_2d_utils.py`, `plot_consentration_2d_utils.py`).
 
 
 ## Training & Evaluation
@@ -246,7 +190,7 @@ Elastic-only robustness flags (also work for some 1D/2D problems with 2D sensors
 ## Repository Layout
 
 - Benchmarks (run scripts)
-  - SetONet: `Benchmarks/run_SetONet/*.py`
+  - SetONet: `Benchmarks/run_SetONet/*.py` (heat, elastic, darcy, chladni, dynamic chladni, concentration, transport, 1D operators)
   - DeepONet: `Benchmarks/run_DeepONet/*.py`
 - Models
   - `Models/SetONet.py` — core SetONet model (Deep Sets branch, trunk, training loop)
@@ -256,11 +200,16 @@ Elastic-only robustness flags (also work for some 1D/2D problems with 2D sensors
   - `Models/utils/config_utils.py` — experiment metadata snapshot to JSON
   - `Models/utils/helper_utils.py` — metrics and input prep helpers
 - Data
-  - Heat 2D: `Data/heat_data/*`
-  - Elastic 2D: `Data/elastic_2d_data/*`
-  - Transport 2D: `Data/transport_data/*`
+  - Heat 2D: `Data/heat_data/`
+  - Concentration (advection–diffusion) 2D: `Data/concentration_data/`
+  - Elastic 2D: `Data/elastic_2d_data/`
+  - Darcy 1D: `Data/darcy_1d_data/`
+  - Chladni 2D: `Data/chladni_data/`
+  - Dynamic Chladni: `Data/dynamic_chladni/`
+  - Synthetic 1D operators: `Data/synthetic_1d_data.py`
+  - Transport 2D: `Data/transport_data/`
   - Utilities: `Data/data_utils.py`
-- Plotting: `Plotting/*`
+- Plotting utilities: `Plotting/*.py` (heat, elastic, darcy, chladni, dynamic chladni, concentration, transport, etc.)
 - Logs: `logs/<model>/<timestamp>/`
 
 
