@@ -307,6 +307,14 @@ def create_synthetic_setonet_model(args, device):
         aggregation_type=args.son_aggregation,
         use_positional_encoding=(args.pos_encoding_type != 'skip'),
         attention_n_tokens=1,
+        branch_head_type=getattr(args, "son_branch_head_type", "standard"),
+        pg_dk=getattr(args, "son_pg_dk", None),
+        pg_dv=getattr(args, "son_pg_dv", None),
+        pg_use_logw=(not getattr(args, "son_pg_no_logw", False)),
+        galerkin_dk=getattr(args, "son_galerkin_dk", None),
+        galerkin_dv=getattr(args, "son_galerkin_dv", None),
+        galerkin_normalize=getattr(args, "son_galerkin_normalize", "total"),
+        galerkin_learn_temperature=getattr(args, "son_galerkin_learn_temperature", False),
     ).to(device)
     
     return model

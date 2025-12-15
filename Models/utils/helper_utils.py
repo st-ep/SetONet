@@ -43,7 +43,30 @@ def prepare_setonet_inputs(sensor_x_global, current_batch_size, batch_f_values_n
     xs_setonet = sensor_x_global.view(1, _global_sensor_size_int, 1).expand(_current_batch_size_int, -1, -1)
 
     # Sensor values for SetONet branch: us_setonet [B, S, 1]
-    us_setonet = batch_f_values_norm_expanded # This is already [B, S, 1]
+    # Allow callers to pass [S], [S, 1], [B, S], or [B, S, 1].
+    us_setonet = batch_f_values_norm_expanded
+    if us_setonet.dim() == 1:
+        us_setonet = us_setonet.view(1, -1, 1)
+    elif us_setonet.dim() == 2:
+        if us_setonet.shape[-1] == 1 and us_setonet.shape[0] == _global_sensor_size_int:
+            us_setonet = us_setonet.unsqueeze(0)  # [1, S, 1]
+        else:
+            us_setonet = us_setonet.unsqueeze(-1)  # [B, S, 1]
+    elif us_setonet.dim() != 3:
+        raise ValueError(f"Expected sensor values to be 1D/2D/3D, got shape={us_setonet.shape}")
+
+    if us_setonet.shape[0] != _current_batch_size_int:
+        if us_setonet.shape[0] == 1:
+            us_setonet = us_setonet.expand(_current_batch_size_int, -1, -1)
+        else:
+            raise ValueError(
+                f"Sensor values batch dim mismatch: got {us_setonet.shape[0]} but expected {_current_batch_size_int}"
+            )
+
+    if us_setonet.shape[1] != _global_sensor_size_int or us_setonet.shape[2] != 1:
+        raise ValueError(
+            f"Expected sensor values shape (B, S, 1)=({_current_batch_size_int}, {_global_sensor_size_int}, 1), got {us_setonet.shape}"
+        )
 
     # Trunk query locations for SetONet: ys_setonet [B, T, 1]
     # batch_x_eval_norm is [T, 1]

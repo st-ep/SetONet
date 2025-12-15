@@ -144,17 +144,19 @@ class DynamicChladniDataset:
         
         xs_padded = torch.zeros(self.batch_size, max_forces, 2, device=self.device)
         us_padded = torch.zeros(self.batch_size, max_forces, 1, device=self.device)
+        sensor_mask = torch.zeros(self.batch_size, max_forces, device=self.device, dtype=torch.bool)
         
         for i, (xs, us) in enumerate(zip(xs_batch, us_batch)):
             n_forces = xs.shape[0]
             xs_padded[i, :n_forces] = xs
             us_padded[i, :n_forces] = us
+            sensor_mask[i, :n_forces] = True
         
         # For uniform grid, all samples have same number of target points
         ys = torch.stack(ys_batch, dim=0)  # (batch_size, n_grid_points, 2)
         G_u_ys = torch.stack(G_u_ys_batch, dim=0)  # (batch_size, n_grid_points, 1)
         
-        return xs_padded, us_padded, ys, G_u_ys, None
+        return xs_padded, us_padded, ys, G_u_ys, sensor_mask
     
     def get_sample(self, idx):
         """Get a specific sample for visualization or analysis."""

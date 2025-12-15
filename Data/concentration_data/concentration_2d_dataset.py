@@ -120,11 +120,13 @@ class ConcentrationDataset:
         
         xs_padded = torch.zeros(self.batch_size, max_sources, 2, device=self.device)
         us_padded = torch.zeros(self.batch_size, max_sources, 1, device=self.device)
+        sensor_mask = torch.zeros(self.batch_size, max_sources, device=self.device, dtype=torch.bool)
         
         for i, (xs, us) in enumerate(zip(xs_batch, us_batch)):
             n_sources = xs.shape[0]
             xs_padded[i, :n_sources] = xs
             us_padded[i, :n_sources] = us
+            sensor_mask[i, :n_sources] = True
         
         if self.is_adaptive:
             # For adaptive mesh, we need to pad target coordinates and concentrations too
@@ -139,13 +141,13 @@ class ConcentrationDataset:
                 ys_padded[i, :n_targets] = ys
                 G_u_ys_padded[i, :n_targets] = G_u_ys
             
-            return xs_padded, us_padded, ys_padded, G_u_ys_padded, None
+            return xs_padded, us_padded, ys_padded, G_u_ys_padded, sensor_mask
         else:
             # For uniform grid, all samples have same number of target points
             ys = torch.stack(ys_batch, dim=0)  # (batch_size, n_grid_points, 2)
             G_u_ys = torch.stack(G_u_ys_batch, dim=0)  # (batch_size, n_grid_points, 1)
             
-            return xs_padded, us_padded, ys, G_u_ys, None
+            return xs_padded, us_padded, ys, G_u_ys, sensor_mask
 
 def load_concentration_dataset(data_path="Data/concentration_data/chem_plume_dataset", batch_size=64, device='cuda'):
     """Load concentration dataset and return dataset wrapper."""

@@ -49,6 +49,20 @@ def parse_arguments():
     parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network')
     parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], 
                        help='Aggregation type for SetONet')
+    parser.add_argument(
+        '--son_branch_head_type',
+        type=str,
+        default="standard",
+        choices=["standard", "petrov_attention"],
+        help="Branch head type: standard (pool+rho) or petrov_attention (PG attention projection).",
+    )
+    parser.add_argument('--son_pg_dk', type=int, default=None, help='PG key/query dim (default: son_phi_output_size)')
+    parser.add_argument('--son_pg_dv', type=int, default=None, help='PG value dim (default: son_phi_output_size)')
+    parser.add_argument(
+        '--son_pg_no_logw',
+        action='store_true',
+        help='Disable adding log(sensor_weights) to PG attention logits (weights are unused by default).',
+    )
     
     # DeepONet architecture (needed to reconstruct model)
     parser.add_argument('--don_p_dim', type=int, default=32, help='Latent dimension p for DeepONet')
@@ -127,6 +141,10 @@ def create_setonet_model(args, device):
         aggregation_type=args.son_aggregation,
         use_positional_encoding=(args.pos_encoding_type != 'skip'),
         attention_n_tokens=1,
+        branch_head_type=args.son_branch_head_type,
+        pg_dk=args.son_pg_dk,
+        pg_dv=args.son_pg_dv,
+        pg_use_logw=(not args.son_pg_no_logw),
     ).to(device)
     
     return model

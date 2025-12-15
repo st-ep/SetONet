@@ -31,6 +31,16 @@ class SetONet(torch.nn.Module):
                  encoding_strategy='concatenate', # Strategy for combining positional and sensor features. Only 'concatenate' is supported.
                  aggregation_type: str = "attention",  # 'mean' or 'attention'
                  attention_n_tokens: int = 1,     # k – number of learnable query tokens
+                 branch_head_type: str = "standard",  # "standard" | "petrov_attention"
+                 pg_dk: int = None,  # key/query dim (default = phi_output_size)
+                 pg_dv: int = None,  # value dim (default = phi_output_size)
+                 pg_use_softmax: bool = True,  # only softmax supported for now
+                 pg_use_logw: bool = True,  # include log(w_i) term when weights provided
+                 pg_n_refine_iters: int = 0,  # number of query refinement iterations (0 = disabled)
+                 galerkin_dk: int = None,  # Galerkin PoU key/query dim (default = phi_output_size)
+                 galerkin_dv: int = None,  # Galerkin PoU value dim (default = phi_output_size)
+                 galerkin_normalize: str = "total",  # Galerkin normalization: "none" | "total" | "token"
+                 galerkin_learn_temperature: bool = False,  # Learn temperature parameter for Galerkin PoU softmax
                  ):
         super().__init__()
 
@@ -54,6 +64,17 @@ class SetONet(torch.nn.Module):
         self.n_trunk_layers = n_trunk_layers
 
         # ---------------------------------------------------------------------
+        # Branch head choice ("standard" | "petrov_attention" | "galerkin_pou")
+        # ---------------------------------------------------------------------
+        self.branch_head_type = branch_head_type.lower()
+        if self.branch_head_type not in ["standard", "petrov_attention", "galerkin_pou"]:
+            raise ValueError("branch_head_type must be one of 'standard', 'petrov_attention', or 'galerkin_pou'")
+        self.pg_use_softmax = pg_use_softmax
+        self.pg_use_logw = pg_use_logw
+        if self.branch_head_type == "petrov_attention" and not self.pg_use_softmax:
+            raise NotImplementedError("Only softmax-normalized PG attention is supported (pg_use_softmax=True).")
+
+        # ---------------------------------------------------------------------
         # Aggregation choice ('mean' | 'sum' | 'attention')
         # ---------------------------------------------------------------------
         self.aggregation = aggregation_type.lower()
@@ -62,7 +83,9 @@ class SetONet(torch.nn.Module):
         self.attention_n_tokens = attention_n_tokens
         self.attention_n_heads = 4 # Default or make configurable if needed
 
-        if self.aggregation == "attention":
+        # Attention pool is only used by "standard" branch head
+        self.pool = None
+        if self.aggregation == "attention" and self.branch_head_type == "standard":
             from .utils.attention_pool import AttentionPool
             self.pool = AttentionPool(phi_output_size,
                                       n_heads=4,
@@ -95,37 +118,87 @@ class SetONet(torch.nn.Module):
         # --- Branch Network (Deep Sets) ---
         # self.pos_encoder_mlp = None # REMOVED: For concatenate strategy with MLP encoding
 
-        if self.encoding_strategy == 'concatenate':
-            # Determine phi input dimension
-            if self.use_positional_encoding: # True only for 'sinusoidal' type and if use_positional_encoding arg is True
-                phi_input_dim = self.pos_encoding_dim + output_size_src
-                # Sinusoidal specific checks (since 'mlp' is removed, if use_positional_encoding is true, it must be sinusoidal)
-                if self.pos_encoding_dim % (2 * self.input_size_src) != 0:
-                    raise ValueError(f"For sinusoidal encoding, pos_encoding_dim ({self.pos_encoding_dim}) must be divisible by 2 * input_size_src ({2 * self.input_size_src}).")
-                # No pos_encoder_mlp is initialized or used for sinusoidal.
-            else: # This case handles pos_encoding_type == 'skip' or if use_positional_encoding (arg) was explicitly False
-                # Original input: raw position + sensor value
-                phi_input_dim = input_size_src + output_size_src
+        # --- Phi Network (only needed for "standard" branch head) ---
+        # petrov_attention has its own internal networks
+        self.phi = None
+        if self.branch_head_type == "standard":
+            if self.encoding_strategy == 'concatenate':
+                # Determine phi input dimension
+                if self.use_positional_encoding: # True only for 'sinusoidal' type and if use_positional_encoding arg is True
+                    phi_input_dim = self.pos_encoding_dim + output_size_src
+                    # Sinusoidal specific checks (since 'mlp' is removed, if use_positional_encoding is true, it must be sinusoidal)
+                    if self.pos_encoding_dim % (2 * self.input_size_src) != 0:
+                        raise ValueError(f"For sinusoidal encoding, pos_encoding_dim ({self.pos_encoding_dim}) must be divisible by 2 * input_size_src ({2 * self.input_size_src}).")
+                    # No pos_encoder_mlp is initialized or used for sinusoidal.
+                else: # This case handles pos_encoding_type == 'skip' or if use_positional_encoding (arg) was explicitly False
+                    # Original input: raw position + sensor value
+                    phi_input_dim = input_size_src + output_size_src
 
-            # Phi network: processes concatenated (encoded_location, value) or (location, value) pairs
-            self.phi = nn.Sequential(
-                nn.Linear(phi_input_dim, phi_hidden_size),
+                # Phi network: processes concatenated (encoded_location, value) or (location, value) pairs
+                self.phi = nn.Sequential(
+                    nn.Linear(phi_input_dim, phi_hidden_size),
+                    activation_fn(),
+                    nn.Linear(phi_hidden_size, phi_hidden_size),
+                    activation_fn(),
+                    nn.Linear(phi_hidden_size, phi_output_size)
+                )
+
+        # --- Rho Network (only needed for "standard" branch head) ---
+        # petrov_attention has its own output projection
+        self.rho = None
+        if self.branch_head_type == "standard":
+            rho_input_dim = (self.phi_output_size *
+                             (self.attention_n_tokens if self.aggregation == "attention" else 1))
+
+            self.rho = nn.Sequential(
+                nn.Linear(rho_input_dim, rho_hidden_size),
                 activation_fn(),
-                nn.Linear(phi_hidden_size, phi_hidden_size),
-                activation_fn(),
-                nn.Linear(phi_hidden_size, phi_output_size)
+                nn.Linear(rho_hidden_size, output_size_tgt * p)
             )
-
-        # Rho network: processes aggregated representation from phi
-        rho_input_dim = (self.phi_output_size *
-                         (self.attention_n_tokens if self.aggregation == "attention" else 1))
-
-        self.rho = nn.Sequential(
-            nn.Linear(rho_input_dim, rho_hidden_size),
-            activation_fn(),
-            nn.Linear(rho_hidden_size, output_size_tgt * p)
-        )
         # --- End Branch Network ---
+
+        # --- Petrov–Galerkin (PG) attention head (Approach 2) ---
+        self.pg_head = None
+        if self.branch_head_type == "petrov_attention":
+            from .utils.petrov_galerkin_head import PetrovGalerkinHead
+
+            dx_enc = self.pos_encoding_dim if self.use_positional_encoding else self.input_size_src
+            dk = pg_dk if pg_dk is not None else self.phi_output_size
+            dv = pg_dv if pg_dv is not None else self.phi_output_size
+            self.pg_head = PetrovGalerkinHead(
+                p=self.p,
+                dx_enc=dx_enc,
+                du=self.output_size_src,
+                dout=self.output_size_tgt,
+                dk=dk,
+                dv=dv,
+                hidden=self.rho_hidden_size,
+                activation_fn=activation_fn,
+                n_refine_iters=pg_n_refine_iters,
+            )
+        # --- End PG head ---
+
+        # --- Galerkin partition-of-unity (PoU) head ---
+        self.galerkin_head = None
+        if self.branch_head_type == "galerkin_pou":
+            from .utils.galerkin_head import GalerkinPoUHead
+
+            dx_enc = self.pos_encoding_dim if self.use_positional_encoding else self.input_size_src
+            dk = galerkin_dk if galerkin_dk is not None else self.phi_output_size
+            dv = galerkin_dv if galerkin_dv is not None else self.phi_output_size
+            self.galerkin_head = GalerkinPoUHead(
+                p=self.p,
+                dx_enc=dx_enc,
+                du=self.output_size_src,
+                dout=self.output_size_tgt,
+                dk=dk,
+                dv=dv,
+                hidden=self.rho_hidden_size,
+                activation_fn=activation_fn,
+                normalize=galerkin_normalize,
+                learn_temperature=galerkin_learn_temperature,
+            )
+        # --- End Galerkin PoU head ---
 
         # --- Trunk Network (MLP) ---
         # Maps y to t_1, ..., t_p (potentially multi-dimensional output_size_tgt)
@@ -191,15 +264,35 @@ class SetONet(torch.nn.Module):
 
         return encoding
 
-    def forward_branch(self, xs, us):
+    def forward_branch(self, xs, us, ys=None, sensor_mask=None, sensor_weights=None):
         """
         Forward pass for the Deep Sets Branch.
         Args:
             xs (torch.Tensor): Sensor locations, shape (batch_size, n_sensors, input_size_src)
             us (torch.Tensor): Sensor values, shape (batch_size, n_sensors, output_size_src)
+            ys (torch.Tensor | None): Target locations (unused, kept for API compatibility)
+            sensor_mask (torch.Tensor | None): (batch_size, n_sensors) bool mask, True = valid
+            sensor_weights (torch.Tensor | None): (batch_size, n_sensors) nonnegative weights
         Returns:
             torch.Tensor: Branch output, shape (batch_size, p, output_size_tgt)
         """
+        # --- Petrov-Galerkin attention head ---
+        if self.branch_head_type == "petrov_attention":
+            x_enc = self._sinusoidal_encoding(xs) if self.use_positional_encoding else xs
+            weights = sensor_weights if (sensor_weights is not None and self.pg_use_logw) else None
+            return self.pg_head(x_enc, us, sensor_mask=sensor_mask, sensor_weights=weights)
+
+        # --- Galerkin partition-of-unity head ---
+        if self.branch_head_type == "galerkin_pou":
+            x_enc = self._sinusoidal_encoding(xs) if self.use_positional_encoding else xs
+            # For Galerkin head, weights are used multiplicatively in the quadrature sum (not in logits)
+            return self.galerkin_head(
+                x_enc,
+                us,
+                sensor_mask=sensor_mask,
+                sensor_weights=sensor_weights,
+            )
+
         batch_size = xs.shape[0]
         n_sensors = xs.shape[1]
 
@@ -279,19 +372,23 @@ class SetONet(torch.nn.Module):
         trunk_out = trunk_out_flat.reshape(batch_size, n_points, self.p, self.output_size_tgt)
         return trunk_out
 
-    def forward(self, xs, us, ys):
+    def forward(self, xs, us, ys, sensor_mask=None, sensor_weights=None):
         """
         Full forward pass for DeepOSet.
         Args:
             xs (torch.Tensor): Sensor locations, shape (batch_size, n_sensors, input_size_src)
             us (torch.Tensor): Sensor values, shape (batch_size, n_sensors, output_size_src)
             ys (torch.Tensor): Trunk input locations, shape (batch_size, n_points, input_size_tgt)
+            sensor_mask (torch.Tensor | None): (batch_size, n_sensors) bool mask, True = valid
+            sensor_weights (torch.Tensor | None): (batch_size, n_sensors) nonnegative weights
         Returns:
             torch.Tensor: Predicted output G(u)(y), shape (batch_size, n_points, output_size_tgt)
         """
-        # Get branch and trunk outputs
-        b = self.forward_branch(xs, us) # Shape: (batch, p, out_tgt)
-        t = self.forward_trunk(ys)      # Shape: (batch, n_points, p, out_tgt)
+        # Get branch output: (batch, p, out_tgt)
+        b = self.forward_branch(xs, us, ys=ys, sensor_mask=sensor_mask, sensor_weights=sensor_weights)
+
+        # Get trunk output: (batch, n_points, p, out_tgt)
+        t = self.forward_trunk(ys)
 
         # Combine using einsum (dot product over latent dimension p)
         # einsum: "bpz, bdpz -> bdz" (b=batch, d=n_points, p=latent_dim, z=out_tgt_dim)
@@ -300,7 +397,7 @@ class SetONet(torch.nn.Module):
         # optionally add bias
         if self.bias is not None:
             # Bias shape is (output_size_tgt), needs broadcasting to (batch, n_points, output_size_tgt)
-            G_u_y = G_u_y + self.bias # Broadcasting handles the addition
+            G_u_y = G_u_y + self.bias  # Broadcasting handles the addition
 
         return G_u_y
 
@@ -357,11 +454,11 @@ class SetONet(torch.nn.Module):
 
             # sample input data - dataset needs to provide xs, us, ys, G_u_ys
             # Ensure dataset.sample() returns locations (xs) and values (us) separately
-            xs, us, ys, G_u_ys, _ = dataset.sample(device=device)
+            xs, us, ys, G_u_ys, sensor_mask = dataset.sample(device=device)
 
 
             # approximate functions, compute error
-            estimated_G_u_ys = self.forward(xs, us, ys)
+            estimated_G_u_ys = self.forward(xs, us, ys, sensor_mask=sensor_mask)
             prediction_loss = torch.nn.MSELoss()(estimated_G_u_ys, G_u_ys)
 
             # Calculate relative L2 error for progress bar

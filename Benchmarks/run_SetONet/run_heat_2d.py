@@ -39,7 +39,35 @@ def parse_arguments():
     parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
     parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention"], help='Aggregation type for SetONet')
     parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
-    
+    parser.add_argument(
+        '--son_branch_head_type',
+        type=str,
+        default="standard",
+        choices=["standard", "petrov_attention", "galerkin_pou"],
+        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), or galerkin_pou (Galerkin partition-of-unity).",
+    )
+    parser.add_argument('--son_pg_dk', type=int, default=None, help='PG attention key/query dim (default: son_phi_output_size)')
+    parser.add_argument('--son_pg_dv', type=int, default=None, help='PG attention value dim (default: son_phi_output_size)')
+    parser.add_argument(
+        '--son_pg_no_logw',
+        action='store_true',
+        help='Disable adding log(sensor_weights) to PG attention logits (weights are unused by default).',
+    )
+    parser.add_argument('--son_galerkin_dk', type=int, default=None, help='Galerkin PoU key/query dim (default: son_phi_output_size)')
+    parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
+    parser.add_argument(
+        '--son_galerkin_normalize',
+        type=str,
+        default="total",
+        choices=["none", "total", "token"],
+        help='Galerkin PoU normalization: "none" (no norm), "total" (divide by total weight), "token" (per-token mass norm).',
+    )
+    parser.add_argument(
+        '--son_galerkin_learn_temperature',
+        action='store_true',
+        help='Learn temperature parameter for Galerkin PoU softmax sharpness.',
+    )
+
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
     parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
@@ -110,8 +138,16 @@ def create_model(args, device):
         aggregation_type=args.son_aggregation,
         use_positional_encoding=(args.pos_encoding_type != 'skip'),
         attention_n_tokens=1,
+        branch_head_type=args.son_branch_head_type,
+        pg_dk=args.son_pg_dk,
+        pg_dv=args.son_pg_dv,
+        pg_use_logw=(not args.son_pg_no_logw),
+        galerkin_dk=args.son_galerkin_dk,
+        galerkin_dv=args.son_galerkin_dv,
+        galerkin_normalize=args.son_galerkin_normalize,
+        galerkin_learn_temperature=args.son_galerkin_learn_temperature,
     ).to(device)
-    
+
     return model
 
 def evaluate_model(model, dataset, heat_dataset, device, n_test_samples=100):
