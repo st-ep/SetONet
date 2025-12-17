@@ -31,7 +31,7 @@ class SetONet(torch.nn.Module):
                  encoding_strategy='concatenate', # Strategy for combining positional and sensor features. Only 'concatenate' is supported.
                  aggregation_type: str = "attention",  # 'mean' or 'attention'
                  attention_n_tokens: int = 1,     # k – number of learnable query tokens
-                 branch_head_type: str = "standard",  # "standard" | "petrov_attention"
+	                 branch_head_type: str = "standard",  # "standard" | "petrov_attention" | "galerkin_pou" | "quadrature"
                  pg_dk: int = None,  # key/query dim (default = phi_output_size)
                  pg_dv: int = None,  # value dim (default = phi_output_size)
                  pg_use_softmax: bool = True,  # only softmax supported for now
@@ -41,7 +41,11 @@ class SetONet(torch.nn.Module):
                  galerkin_dv: int = None,  # Galerkin PoU value dim (default = phi_output_size)
                  galerkin_normalize: str = "total",  # Galerkin normalization: "none" | "total" | "token"
                  galerkin_learn_temperature: bool = False,  # Learn temperature parameter for Galerkin PoU softmax
-                 ):
+                 quad_dk: int = None,  # Quadrature head key/query dim (default = phi_output_size)
+                 quad_dv: int = None,  # Quadrature head value dim (default = phi_output_size)
+                 quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
+                 quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
+	                 ):
         super().__init__()
 
         # set hyperparameters
@@ -64,11 +68,18 @@ class SetONet(torch.nn.Module):
         self.n_trunk_layers = n_trunk_layers
 
         # ---------------------------------------------------------------------
-        # Branch head choice ("standard" | "petrov_attention" | "galerkin_pou")
+        # Branch head choice ("standard" | "petrov_attention" | "galerkin_pou" | "quadrature")
         # ---------------------------------------------------------------------
         self.branch_head_type = branch_head_type.lower()
-        if self.branch_head_type not in ["standard", "petrov_attention", "galerkin_pou"]:
-            raise ValueError("branch_head_type must be one of 'standard', 'petrov_attention', or 'galerkin_pou'")
+        if self.branch_head_type not in [
+            "standard",
+            "petrov_attention",
+            "galerkin_pou",
+            "quadrature",
+        ]:
+            raise ValueError(
+                "branch_head_type must be one of 'standard', 'petrov_attention', 'galerkin_pou', or 'quadrature'"
+            )
         self.pg_use_softmax = pg_use_softmax
         self.pg_use_logw = pg_use_logw
         if self.branch_head_type == "petrov_attention" and not self.pg_use_softmax:
@@ -97,6 +108,12 @@ class SetONet(torch.nn.Module):
         # Validate pos_encoding_type
         if self.pos_encoding_type not in ['sinusoidal', 'skip']:
              raise ValueError(f"Unknown pos_encoding_type: {self.pos_encoding_type}. Choose 'sinusoidal' or 'skip'.")
+        if self.use_positional_encoding:
+            if self.pos_encoding_dim % (2 * self.input_size_src) != 0:
+                raise ValueError(
+                    f"For sinusoidal encoding, pos_encoding_dim ({self.pos_encoding_dim}) must be divisible by "
+                    f"2 * input_size_src ({2 * self.input_size_src})."
+                )
 
         # Store LR schedule parameters
         self.initial_lr = initial_lr
@@ -126,9 +143,6 @@ class SetONet(torch.nn.Module):
                 # Determine phi input dimension
                 if self.use_positional_encoding: # True only for 'sinusoidal' type and if use_positional_encoding arg is True
                     phi_input_dim = self.pos_encoding_dim + output_size_src
-                    # Sinusoidal specific checks (since 'mlp' is removed, if use_positional_encoding is true, it must be sinusoidal)
-                    if self.pos_encoding_dim % (2 * self.input_size_src) != 0:
-                        raise ValueError(f"For sinusoidal encoding, pos_encoding_dim ({self.pos_encoding_dim}) must be divisible by 2 * input_size_src ({2 * self.input_size_src}).")
                     # No pos_encoder_mlp is initialized or used for sinusoidal.
                 else: # This case handles pos_encoding_type == 'skip' or if use_positional_encoding (arg) was explicitly False
                     # Original input: raw position + sensor value
@@ -200,6 +214,28 @@ class SetONet(torch.nn.Module):
             )
         # --- End Galerkin PoU head ---
 
+        # --- Quadrature head (non-normalized test functions, additive quadrature sum) ---
+        self.quadrature_head = None
+        if self.branch_head_type == "quadrature":
+            from .utils.quadrature_head import QuadratureHead
+
+            dx_enc = self.pos_encoding_dim if self.use_positional_encoding else self.input_size_src
+            dk = quad_dk if quad_dk is not None else self.phi_output_size
+            dv = quad_dv if quad_dv is not None else self.phi_output_size
+            self.quadrature_head = QuadratureHead(
+                p=self.p,
+                dx_enc=dx_enc,
+                du=self.output_size_src,
+                dout=self.output_size_tgt,
+                dk=dk,
+                dv=dv,
+                hidden=self.rho_hidden_size,
+                activation_fn=activation_fn,
+                normalize=quad_normalize,
+                learn_temperature=quad_learn_temperature,
+            )
+        # --- End Quadrature head ---
+
         # --- Trunk Network (MLP) ---
         # Maps y to t_1, ..., t_p (potentially multi-dimensional output_size_tgt)
         trunk_layers = []
@@ -209,7 +245,7 @@ class SetONet(torch.nn.Module):
             trunk_layers.append(nn.Linear(trunk_hidden_size, trunk_hidden_size))
             trunk_layers.append(activation_fn())
         trunk_layers.append(nn.Linear(trunk_hidden_size, output_size_tgt * p))
-        
+
         # trunk_layers.append(torch.nn.Sigmoid())
         self.trunk = torch.nn.Sequential(*trunk_layers)
         # --- End Trunk Network ---
@@ -232,8 +268,10 @@ class SetONet(torch.nn.Module):
         # coords shape: (batch_size, n_sensors, input_size_src)
         # Output shape: (batch_size, n_sensors, pos_encoding_dim)
 
-        # Ensure pos_encoding_dim is divisible by 2*input_size_src (already checked in init)
-        dims_per_coord = self.pos_encoding_dim // self.input_size_src
+        # Make encoding depend on coords' last dimension (works for both x and y)
+        coord_dim = coords.shape[-1]
+        # Ensure pos_encoding_dim is divisible by 2*coord_dim
+        dims_per_coord = self.pos_encoding_dim // coord_dim
         half_dim = dims_per_coord // 2
 
         # Frequency bands
@@ -256,13 +294,95 @@ class SetONet(torch.nn.Module):
         # Interleave sin and cos and flatten the last two dimensions
         # Shape: (batch, n_sensors, input_size_src, dims_per_coord)
         encoding = torch.cat([sin_embed, cos_embed], dim=-1).reshape(
-            coords.shape[0], coords.shape[1], self.input_size_src, dims_per_coord
+            coords.shape[0], coords.shape[1], coord_dim, dims_per_coord
         )
 
         # Reshape to final desired dimension: (batch, n_sensors, pos_encoding_dim)
         encoding = encoding.reshape(coords.shape[0], coords.shape[1], self.pos_encoding_dim)
 
         return encoding
+
+    def _infer_sensor_weights(self, xs: torch.Tensor, sensor_mask: torch.Tensor | None, eps: float = 1e-8) -> torch.Tensor:
+        """
+        Infer simple quadrature weights from sensor coordinates.
+
+        - For 1D sensors: trapezoidal/Voronoi-style cell sizes from sorted coordinates.
+        - For higher-dimensional sensors: fall back to uniform weights (per valid sensor).
+
+        Args:
+            xs: (B, N, dx) raw sensor coordinates
+            sensor_mask: (B, N) bool mask (optional)
+            eps: numerical stability constant
+        Returns:
+            w: (B, N) nonnegative weights (zeros for masked-out sensors)
+        """
+        if xs.dim() != 3:
+            raise ValueError(f"xs must be 3D (B, N, dx), got {xs.shape=}")
+
+        batch_size, n_sensors, dx = xs.shape
+        device, dtype = xs.device, xs.dtype
+
+        mask = None
+        if sensor_mask is not None:
+            if sensor_mask.dim() == 3 and sensor_mask.shape[-1] == 1:
+                sensor_mask = sensor_mask.squeeze(-1)
+            if sensor_mask.shape != (batch_size, n_sensors):
+                raise ValueError(f"{sensor_mask.shape=} must be (B, N) = {(batch_size, n_sensors)}")
+            mask = sensor_mask.to(device=device).bool()
+
+        # Higher-dimensional: uniform over valid sensors (weight scale handled by head normalization).
+        if dx != 1:
+            w = torch.ones((batch_size, n_sensors), device=device, dtype=dtype)
+            if mask is not None:
+                w = w * mask.to(dtype)
+            return w
+
+        # 1D: trapezoidal weights from sorted coordinates.
+        x = xs[..., 0].detach()
+        w = torch.zeros((batch_size, n_sensors), device=device, dtype=dtype)
+
+        # Fast path: no mask (all sensors valid)
+        if mask is None:
+            if n_sensors == 1:
+                return torch.ones((batch_size, n_sensors), device=device, dtype=dtype)
+
+            x_sorted, sort_idx = torch.sort(x, dim=1)
+            dx_sorted = (x_sorted[:, 1:] - x_sorted[:, :-1]).clamp_min(0.0)  # (B, N-1)
+
+            w_sorted = torch.zeros((batch_size, n_sensors), device=device, dtype=dtype)
+            w_sorted[:, 0] = dx_sorted[:, 0] / 2.0
+            w_sorted[:, -1] = dx_sorted[:, -1] / 2.0
+            if n_sensors > 2:
+                w_sorted[:, 1:-1] = (dx_sorted[:, :-1] + dx_sorted[:, 1:]) / 2.0
+
+            w.scatter_(1, sort_idx, w_sorted)
+            return w
+
+        # Masked path: per-sample valid set (variable number of sensors).
+        x = x.detach()  # weights are geometry-derived; do not backprop through sorting
+        for b in range(batch_size):
+            idx_valid = torch.nonzero(mask[b], as_tuple=False).squeeze(-1)
+            n_valid = int(idx_valid.numel())
+            if n_valid == 0:
+                continue
+            if n_valid == 1:
+                w[b, idx_valid[0]] = 1.0
+                continue
+
+            x_valid = x[b, idx_valid]
+            x_sorted, perm = torch.sort(x_valid)
+            idx_sorted = idx_valid[perm]
+
+            dx_sorted = (x_sorted[1:] - x_sorted[:-1]).clamp_min(0.0)  # (n_valid-1,)
+            w_sorted = torch.zeros((n_valid,), device=device, dtype=dtype)
+            w_sorted[0] = dx_sorted[0] / 2.0
+            w_sorted[-1] = dx_sorted[-1] / 2.0
+            if n_valid > 2:
+                w_sorted[1:-1] = (dx_sorted[:-1] + dx_sorted[1:]) / 2.0
+
+            w[b, idx_sorted] = w_sorted
+
+        return w
 
     def forward_branch(self, xs, us, ys=None, sensor_mask=None, sensor_weights=None):
         """
@@ -291,6 +411,19 @@ class SetONet(torch.nn.Module):
                 us,
                 sensor_mask=sensor_mask,
                 sensor_weights=sensor_weights,
+            )
+
+        # --- Quadrature head (non-normalized test functions) ---
+        if self.branch_head_type == "quadrature":
+            x_enc = self._sinusoidal_encoding(xs) if self.use_positional_encoding else xs
+            inferred_weights = (
+                self._infer_sensor_weights(xs, sensor_mask) if sensor_weights is None else sensor_weights
+            )
+            return self.quadrature_head(
+                x_enc,
+                us,
+                sensor_mask=sensor_mask,
+                sensor_weights=inferred_weights,
             )
 
         batch_size = xs.shape[0]
@@ -482,8 +615,9 @@ class SetONet(torch.nn.Module):
 
             # update progress bar
             if progress_bar:
+                grad_norm = float(norm)
                 # Display current LR and relative L2 error in the progress bar
-                bar.set_description(f"Step {self.total_steps} | Loss: {loss.item():.4e} | Rel L2: {rel_l2_error.item():.4f} | Grad Norm: {norm:.2f} | LR: {current_lr:.2e}")
+                bar.set_description(f"Step {self.total_steps} | Loss: {loss.item():.4e} | Rel L2: {rel_l2_error.item():.4f} | Grad Norm: {grad_norm:.2f} | LR: {current_lr:.2e}")
 
             # callbacks
             if callback is not None:

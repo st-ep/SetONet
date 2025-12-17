@@ -42,8 +42,8 @@ def parse_arguments():
         '--son_branch_head_type',
         type=str,
         default="standard",
-        choices=["standard", "petrov_attention", "galerkin_pou"],
-        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), or galerkin_pou (Galerkin partition-of-unity).",
+        choices=["standard", "petrov_attention", "galerkin_pou", "quadrature"],
+        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), galerkin_pou (Galerkin partition-of-unity), or quadrature (additive quadrature over learned test functions).",
     )
     parser.add_argument('--son_pg_dk', type=int, default=None, help='PG attention key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_pg_dv', type=int, default=None, help='PG attention value dim (default: son_phi_output_size)')
