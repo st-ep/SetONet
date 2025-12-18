@@ -315,6 +315,9 @@ def create_synthetic_setonet_model(args, device):
         galerkin_dv=getattr(args, "son_galerkin_dv", None),
         galerkin_normalize=getattr(args, "son_galerkin_normalize", "total"),
         galerkin_learn_temperature=getattr(args, "son_galerkin_learn_temperature", False),
+        adapt_quad_rank=getattr(args, "son_adapt_quad_rank", 4),
+        adapt_quad_hidden=getattr(args, "son_adapt_quad_hidden", 64),
+        adapt_quad_scale=getattr(args, "son_adapt_quad_scale", 0.1),
     ).to(device)
     
     return model

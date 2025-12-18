@@ -31,7 +31,7 @@ class SetONet(torch.nn.Module):
                  encoding_strategy='concatenate', # Strategy for combining positional and sensor features. Only 'concatenate' is supported.
                  aggregation_type: str = "attention",  # 'mean' or 'attention'
                  attention_n_tokens: int = 1,     # k – number of learnable query tokens
-	                 branch_head_type: str = "standard",  # "standard" | "petrov_attention" | "galerkin_pou" | "quadrature"
+	                 branch_head_type: str = "standard",  # "standard" | "petrov_attention" | "galerkin_pou" | "quadrature" | "adaptive_quadrature"
                  pg_dk: int = None,  # key/query dim (default = phi_output_size)
                  pg_dv: int = None,  # value dim (default = phi_output_size)
                  pg_use_softmax: bool = True,  # only softmax supported for now
@@ -41,10 +41,14 @@ class SetONet(torch.nn.Module):
                  galerkin_dv: int = None,  # Galerkin PoU value dim (default = phi_output_size)
                  galerkin_normalize: str = "total",  # Galerkin normalization: "none" | "total" | "token"
                  galerkin_learn_temperature: bool = False,  # Learn temperature parameter for Galerkin PoU softmax
-                 quad_dk: int = None,  # Quadrature head key/query dim (default = phi_output_size)
-                 quad_dv: int = None,  # Quadrature head value dim (default = phi_output_size)
-                 quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
-                 quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
+	                 quad_dk: int = None,  # Quadrature head key/query dim (default = phi_output_size)
+	                 quad_dv: int = None,  # Quadrature head value dim (default = phi_output_size)
+	                 quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
+	                 quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
+	                 adapt_quad_rank: int = 4,  # Low-rank adaptation rank R for adaptive_quadrature
+	                 adapt_quad_hidden: int | None = 64,  # Hidden dim for the adapter MLP (None -> infer)
+	                 adapt_quad_scale: float = 0.1,  # Tanh-bounded adapter scale
+	                 adapt_quad_use_value_context: bool = True,  # Only value-based context supported
 	                 ):
         super().__init__()
 
@@ -68,7 +72,7 @@ class SetONet(torch.nn.Module):
         self.n_trunk_layers = n_trunk_layers
 
         # ---------------------------------------------------------------------
-        # Branch head choice ("standard" | "petrov_attention" | "galerkin_pou" | "quadrature")
+        # Branch head choice ("standard" | "petrov_attention" | "galerkin_pou" | "quadrature" | "adaptive_quadrature")
         # ---------------------------------------------------------------------
         self.branch_head_type = branch_head_type.lower()
         if self.branch_head_type not in [
@@ -76,9 +80,10 @@ class SetONet(torch.nn.Module):
             "petrov_attention",
             "galerkin_pou",
             "quadrature",
+            "adaptive_quadrature",
         ]:
             raise ValueError(
-                "branch_head_type must be one of 'standard', 'petrov_attention', 'galerkin_pou', or 'quadrature'"
+                "branch_head_type must be one of 'standard', 'petrov_attention', 'galerkin_pou', 'quadrature', or 'adaptive_quadrature'"
             )
         self.pg_use_softmax = pg_use_softmax
         self.pg_use_logw = pg_use_logw
@@ -235,6 +240,32 @@ class SetONet(torch.nn.Module):
                 learn_temperature=quad_learn_temperature,
             )
         # --- End Quadrature head ---
+
+        # --- Input-adaptive quadrature head (context-conditioned test functions) ---
+        self.adaptive_quadrature_head = None
+        if self.branch_head_type == "adaptive_quadrature":
+            from .utils.adaptive_quadrature_head import AdaptiveQuadratureHead
+
+            dx_enc = self.pos_encoding_dim if self.use_positional_encoding else self.input_size_src
+            dk = quad_dk if quad_dk is not None else self.phi_output_size
+            dv = quad_dv if quad_dv is not None else self.phi_output_size
+            self.adaptive_quadrature_head = AdaptiveQuadratureHead(
+                p=self.p,
+                dx_enc=dx_enc,
+                du=self.output_size_src,
+                dout=self.output_size_tgt,
+                dk=dk,
+                dv=dv,
+                hidden=self.rho_hidden_size,
+                activation_fn=activation_fn,
+                adapt_rank=adapt_quad_rank,
+                adapt_hidden=adapt_quad_hidden,
+                adapt_scale=adapt_quad_scale,
+                use_value_context=adapt_quad_use_value_context,
+                normalize=quad_normalize,
+                learn_temperature=quad_learn_temperature,
+            )
+        # --- End adaptive quadrature head ---
 
         # --- Trunk Network (MLP) ---
         # Maps y to t_1, ..., t_p (potentially multi-dimensional output_size_tgt)
@@ -420,6 +451,19 @@ class SetONet(torch.nn.Module):
                 self._infer_sensor_weights(xs, sensor_mask) if sensor_weights is None else sensor_weights
             )
             return self.quadrature_head(
+                x_enc,
+                us,
+                sensor_mask=sensor_mask,
+                sensor_weights=inferred_weights,
+            )
+
+        # --- Input-adaptive quadrature head (context-conditioned test functions) ---
+        if self.branch_head_type == "adaptive_quadrature":
+            x_enc = self._sinusoidal_encoding(xs) if self.use_positional_encoding else xs
+            inferred_weights = (
+                self._infer_sensor_weights(xs, sensor_mask) if sensor_weights is None else sensor_weights
+            )
+            return self.adaptive_quadrature_head(
                 x_enc,
                 us,
                 sensor_mask=sensor_mask,

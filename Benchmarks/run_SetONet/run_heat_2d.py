@@ -43,8 +43,8 @@ def parse_arguments():
         '--son_branch_head_type',
         type=str,
         default="standard",
-        choices=["standard", "petrov_attention", "galerkin_pou", "quadrature"],
-        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), galerkin_pou (Galerkin partition-of-unity), or quadrature (additive quadrature over learned test functions).",
+        choices=["standard", "petrov_attention", "galerkin_pou", "quadrature", "adaptive_quadrature"],
+        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), galerkin_pou (Galerkin partition-of-unity), quadrature (additive quadrature over learned test functions), or adaptive_quadrature (input-adaptive quadrature).",
     )
     parser.add_argument('--son_pg_dk', type=int, default=None, help='PG attention key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_pg_dv', type=int, default=None, help='PG attention value dim (default: son_phi_output_size)')
@@ -67,6 +67,9 @@ def parse_arguments():
         action='store_true',
         help='Learn temperature parameter for Galerkin PoU softmax sharpness.',
     )
+    parser.add_argument('--son_adapt_quad_rank', type=int, default=4, help='Adaptive quadrature low-rank update rank R')
+    parser.add_argument('--son_adapt_quad_hidden', type=int, default=64, help='Adaptive quadrature adapter MLP hidden dimension')
+    parser.add_argument('--son_adapt_quad_scale', type=float, default=0.1, help='Adaptive quadrature tanh-bounded update scale')
 
     # Training parameters
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
@@ -146,6 +149,9 @@ def create_model(args, device):
         galerkin_dv=args.son_galerkin_dv,
         galerkin_normalize=args.son_galerkin_normalize,
         galerkin_learn_temperature=args.son_galerkin_learn_temperature,
+        adapt_quad_rank=args.son_adapt_quad_rank,
+        adapt_quad_hidden=args.son_adapt_quad_hidden,
+        adapt_quad_scale=args.son_adapt_quad_scale,
     ).to(device)
 
     return model
