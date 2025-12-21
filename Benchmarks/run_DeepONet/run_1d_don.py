@@ -58,14 +58,20 @@ def parse_arguments():
     parser.add_argument('--tb_eval_frequency', type=int, default=1000, help='TensorBoard evaluation frequency (steps)')
     parser.add_argument('--tb_test_samples', type=int, default=100, help='Number of test samples for TensorBoard')
     
+    # Logging directory (overrides default if provided)
+    parser.add_argument('--log_dir', type=str, default=None, help='Custom log directory (overrides default timestamped dir)')
+    
     return parser.parse_args()
 
-def setup_logging(benchmark_type):
-    """Setup logging directory based on benchmark type."""
-    logs_base_in_project = os.path.join("logs")
-    model_folder_name = f"DeepONet_{benchmark_type}"  # DeepONet_derivative or DeepONet_integral
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
+def setup_logging(benchmark_type, custom_log_dir=None):
+    """Setup logging directory based on benchmark type or use custom directory."""
+    if custom_log_dir:
+        log_dir = custom_log_dir
+    else:
+        logs_base_in_project = os.path.join("logs")
+        model_folder_name = f"DeepONet_{benchmark_type}"  # DeepONet_derivative or DeepONet_integral
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
     print(f"Logging to: {log_dir}")
     return log_dir
@@ -117,7 +123,7 @@ def main():
         print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using interpolation")
         print("(Training will use full sensor data)")
     
-    log_dir = setup_logging(args.benchmark)
+    log_dir = setup_logging(args.benchmark, args.log_dir)
     params = setup_parameters(args)
     
     # Set random seed and ensure reproducibility

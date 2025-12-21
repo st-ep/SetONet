@@ -1,0 +1,68 @@
+# =============================================================================
+# Benchmark Configuration File
+# =============================================================================
+# Edit this file to control which experiments to run.
+# Every enabled model will run on every enabled benchmark.
+
+# -----------------------------------------------------------------------------
+# Seeds to run
+# -----------------------------------------------------------------------------
+seeds: [0, 1, 2, 3, 4]
+
+# -----------------------------------------------------------------------------
+# GPU devices for parallel execution
+# -----------------------------------------------------------------------------
+devices: ["cuda:0", "cuda:1"]
+
+# -----------------------------------------------------------------------------
+# Models to run
+# Comment out models you don't want to run
+# -----------------------------------------------------------------------------
+# Available models:
+#   - deeponet            : DeepONet baseline
+#   - setonet_sum         : SetONet with sum aggregation
+#   - setonet_mean        : SetONet with mean aggregation
+#   - setonet_attention   : SetONet with attention aggregation (DEFAULT)
+#   - setonet_petrov      : SetONet with Petrov-Galerkin attention head
+#   - setonet_galerkin    : SetONet with Galerkin partition-of-unity head
+#   - setonet_quadrature  : SetONet with quadrature head
+#   - setonet_adaptive    : SetONet with adaptive quadrature head
+# -----------------------------------------------------------------------------
+models:
+  - deeponet
+  - setonet_attention
+  # - setonet_sum
+  # - setonet_mean
+  # - setonet_petrov
+  # - setonet_galerkin
+  # - setonet_quadrature
+  # - setonet_adaptive
+
+# -----------------------------------------------------------------------------
+# Benchmarks to run
+# Comment out benchmarks you don't want to run
+# -----------------------------------------------------------------------------
+# Note: DeepONet only supports: elastic_2d, darcy_1d, 1d
+#       SetONet supports all benchmarks
+# -----------------------------------------------------------------------------
+benchmarks:
+  - heat_2d
+  - elastic_2d
+  - darcy_1d
+  - 1d
+  - concentration_2d
+  - transport
+
+# -----------------------------------------------------------------------------
+# Optional parameter overrides
+# -----------------------------------------------------------------------------
+overrides:
+  # Example: reduce epochs for all heat_2d runs
+  # heat_2d:
+  #   son_epochs: 50000
+
+# -----------------------------------------------------------------------------
+# Advanced settings
+# -----------------------------------------------------------------------------
+continue_on_failure: true
+log_level: INFO

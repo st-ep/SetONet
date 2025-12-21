@@ -2,12 +2,15 @@
 """
 Multi-Seed Benchmark Runner for SetONet and DeepONet.
 
+Automatically generates all_configs.json and param_table.csv before running.
+
 Usage:
     python Benchmarks/run_benchmarks.py --config Benchmarks/benchmark_config.yaml
     python Benchmarks/run_benchmarks.py --dry-run
     python Benchmarks/run_benchmarks.py --seeds 0,1,2 --benchmarks heat_2d,darcy_1d
 """
 import argparse
+import json
 import logging
 import shutil
 import sys
@@ -19,8 +22,9 @@ from typing import Any, Dict, List
 import yaml
 
 from benchmark_utils import (
-    BENCHMARK_CONFIG_MAP, DEEPONET_SCRIPTS, MODEL_VARIANTS, SETONET_SCRIPTS,
-    Job, aggregate_results, run_jobs_parallel,
+    DEEPONET_SCRIPTS, MODEL_VARIANTS, SETONET_SCRIPTS,
+    Job, aggregate_results, generate_all_configs, generate_param_table,
+    load_benchmark_config, run_jobs_parallel,
 )
 
 
@@ -33,19 +37,6 @@ def load_config(config_path: str) -> Dict[str, Any]:
     for k, v in defaults.items():
         config.setdefault(k, v)
     return config
-
-
-def load_benchmark_config(benchmarks_dir: Path, base_model: str, benchmark: str) -> Dict[str, Any]:
-    """Load hyperparameter config for a (base_model, benchmark) pair."""
-    config_filename = BENCHMARK_CONFIG_MAP.get(base_model, {}).get(benchmark)
-    if not config_filename:
-        return {}
-    config_path = benchmarks_dir / "configs" / config_filename
-    if not config_path.exists():
-        logging.warning(f"Config not found: {config_path}")
-        return {}
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f) or {}
 
 
 def build_job_queue(config: Dict[str, Any], benchmarks_dir: Path) -> List[Job]:
@@ -91,11 +82,40 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def save_configs_and_param_table(script_dir: Path, results_dir: Path) -> None:
+    """Generate and save all_configs.json and param_table.csv."""
+    # Save all configs
+    configs = generate_all_configs(script_dir)
+    config_path = results_dir / "all_configs.json"
+    with open(config_path, 'w') as f:
+        json.dump({"generated_at": datetime.now().isoformat(),
+                  "description": "Complete configs for all (model, benchmark) pairs",
+                  "model_variants": list(MODEL_VARIANTS.keys()), "configs": configs}, f, indent=2)
+    logging.info(f"Saved configs to: {config_path}")
+
+    # Save param table
+    param_table = generate_param_table(script_dir)
+    all_benchmarks = sorted(set(b for m in param_table.values() for b in m.keys()))
+    csv_path = results_dir / "param_table.csv"
+    with open(csv_path, 'w') as f:
+        f.write("model," + ",".join(all_benchmarks) + "\n")
+        for model_name in MODEL_VARIANTS.keys():
+            if model_name not in param_table:
+                continue
+            f.write(",".join([model_name] + [str(param_table[model_name].get(b, "")) for b in all_benchmarks]) + "\n")
+    logging.info(f"Saved param table to: {csv_path}")
+
+
 def main():
     args = parse_args()
     script_dir = Path(__file__).parent.resolve()
     project_root = script_dir.parent
 
+    logs_all_dir = project_root / "logs_all"
+    results_dir = logs_all_dir / "_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load and validate config
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = project_root / config_path
@@ -112,11 +132,9 @@ def main():
         config['devices'] = [d.strip() for d in args.devices.split(',')]
     if args.benchmarks:
         config['benchmarks'] = [b.strip() for b in args.benchmarks.split(',')]
-    if args.models:
-        base_filter = args.models if args.models != "both" else None
-        if base_filter:
-            config['models'] = [m for m in config['models']
-                               if MODEL_VARIANTS.get(m, {"base": m}).get("base") == base_filter]
+    if args.models and args.models != "both":
+        config['models'] = [m for m in config['models']
+                           if MODEL_VARIANTS.get(m, {"base": m}).get("base") == args.models]
 
     logging.basicConfig(level=getattr(logging, config.get('log_level', 'INFO').upper()),
                        format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -126,24 +144,30 @@ def main():
         print("No jobs to run.")
         sys.exit(0)
 
-    run_output_dir = Path(args.output_dir) if args.output_dir else \
-                     project_root / "logs" / "benchmark_runs" / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy(config_path, run_output_dir / "benchmark_config.yaml")
+    # Use custom output dir or default logs_all
+    if args.output_dir:
+        logs_all_dir = Path(args.output_dir)
+        results_dir = logs_all_dir / "_results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy(config_path, results_dir / "benchmark_config.yaml")
+    save_configs_and_param_table(script_dir, results_dir)
 
     if args.dry_run:
         print(f"\nDRY RUN - {len(jobs)} jobs:\n")
-        print(f"{'#':<4} {'Job ID':<40} {'Device':<12} Overrides")
-        print("-" * 80)
+        print(f"{'#':<4} {'Job ID':<40} {'Device':<12} Log Dir")
+        print("-" * 90)
         for i, job in enumerate(jobs, 1):
-            print(f"{i:<4} {job.job_id:<40} {job.device:<12} {job.overrides or '(defaults)'}")
-        print(f"\nOutput: {run_output_dir}")
+            job_log = f"logs_all/{job.benchmark}/{job.model}/seed_{job.seed}/"
+            print(f"{i:<4} {job.job_id:<40} {job.device:<12} {job_log}")
+        print(f"\nOutput structure: logs_all/<benchmark>/<model>/seed_<X>/")
+        print(f"Results: {results_dir}")
         return
 
-    logging.info(f"Starting {len(jobs)} jobs, output: {run_output_dir}")
+    logging.info(f"Starting {len(jobs)} jobs, output: {logs_all_dir}")
     start = time.time()
-    results = run_jobs_parallel(jobs, config, script_dir, project_root, run_output_dir)
-    aggregate_results(results, run_output_dir)
+    results = run_jobs_parallel(jobs, config, script_dir, project_root, logs_all_dir)
+    aggregate_results(results, results_dir)
     logging.info(f"Total time: {(time.time() - start) / 60:.1f} min")
 
 

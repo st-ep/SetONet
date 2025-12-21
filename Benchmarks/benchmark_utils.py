@@ -13,6 +13,8 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any, Dict, List, Optional, Tuple
 
+import yaml
+
 # Script mappings
 SETONET_SCRIPTS = {
     "heat_2d": "run_heat_2d.py", "elastic_2d": "run_elastic_2d.py",
@@ -43,6 +45,13 @@ MODEL_VARIANTS = {
     "setonet_galerkin": {"base": "setonet", "overrides": {"son_branch_head_type": "galerkin_pou"}},
     "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"}},
     "setonet_adaptive": {"base": "setonet", "overrides": {"son_branch_head_type": "adaptive_quadrature"}},
+}
+
+# Benchmark dimensions: (input_size_src, output_size_src, input_size_tgt, output_size_tgt)
+BENCHMARK_DIMS = {
+    "1d": (1, 1, 1, 1), "darcy_1d": (1, 1, 1, 1),
+    "heat_2d": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "elastic_2d": (2, 1, 2, 1),
+    "transport": (2, 1, 2, 2),
 }
 
 
@@ -84,7 +93,20 @@ class JobResult:
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
-def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, run_output_dir: Path) -> JobResult:
+def load_benchmark_config(benchmarks_dir: Path, base_model: str, benchmark: str) -> Dict[str, Any]:
+    """Load hyperparameter config for a (base_model, benchmark) pair."""
+    config_filename = BENCHMARK_CONFIG_MAP.get(base_model, {}).get(benchmark)
+    if not config_filename:
+        return {}
+    config_path = benchmarks_dir / "configs" / config_filename
+    if not config_path.exists():
+        logging.warning(f"Config not found: {config_path}")
+        return {}
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f) or {}
+
+
+def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, logs_all_dir: Path) -> JobResult:
     """Execute a single benchmark job."""
     start_time = time.time()
     try:
@@ -93,7 +115,12 @@ def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, run_outpu
             return JobResult(job, False, error_message=f"Script not found: {script_path}",
                            duration_seconds=time.time() - start_time)
 
-        cmd = [sys.executable, str(script_path), "--seed", str(job.seed), "--device", job.device]
+        # Build log directory: logs_all/<benchmark>/<model>/seed_<X>
+        job_log_dir = logs_all_dir / job.benchmark / job.model / f"seed_{job.seed}"
+        job_log_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [sys.executable, str(script_path), "--seed", str(job.seed), "--device", job.device,
+               "--log_dir", str(job_log_dir)]
         for key, value in job.overrides.items():
             if isinstance(value, bool):
                 if value: cmd.append(f"--{key}")
@@ -103,10 +130,11 @@ def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, run_outpu
             else:
                 cmd.extend([f"--{key}", str(value)])
 
-        job_log_file = run_output_dir / f"{job.job_id}.log"
+        console_log = logs_all_dir / "_results" / "console_logs" / f"{job.job_id}.log"
+        console_log.parent.mkdir(parents=True, exist_ok=True)
         logging.info(f"Starting: {job.job_id} on {job.device}")
 
-        with open(job_log_file, 'w') as log_f:
+        with open(console_log, 'w') as log_f:
             log_f.write(f"Job: {job.job_id}\nCommand: {' '.join(cmd)}\nStarted: {datetime.now().isoformat()}\n{'='*80}\n\n")
             log_f.flush()
             result = subprocess.run(cmd, cwd=str(project_root), stdout=log_f, stderr=subprocess.STDOUT, text=True)
@@ -115,51 +143,35 @@ def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, run_outpu
         if result.returncode != 0:
             return JobResult(job, False, error_message=f"Exit code {result.returncode}", duration_seconds=duration)
 
-        log_dir, metrics = find_job_results(job, project_root)
+        metrics = extract_metrics_from_log_dir(job_log_dir)
         logging.info(f"Completed: {job.job_id} in {duration:.1f}s")
-        return JobResult(job, True, log_dir=log_dir, duration_seconds=duration, metrics=metrics)
+        return JobResult(job, True, log_dir=str(job_log_dir), duration_seconds=duration, metrics=metrics)
 
     except Exception as e:
         logging.error(f"Error in {job.job_id}: {e}")
         return JobResult(job, False, error_message=str(e), duration_seconds=time.time() - start_time)
 
 
-def find_job_results(job: Job, project_root: Path) -> Tuple[Optional[str], Dict[str, float]]:
-    """Find log directory and extract metrics for a completed job."""
-    prefix = "SetONet" if job.base_model == "setonet" else "DeepONet"
-    patterns = [f"{prefix}_{job.benchmark}", f"{prefix}_{job.benchmark.replace('_', '')}"]
-    logs_dir = project_root / "logs"
-    
-    latest_dir, latest_time = None, 0
-    for pattern in patterns:
-        pattern_dir = logs_dir / pattern
-        if not pattern_dir.exists(): continue
-        for subdir in pattern_dir.iterdir():
-            config_file = subdir / "experiment_config.json"
-            if not config_file.exists(): continue
-            try:
-                with open(config_file) as f:
-                    cfg = json.load(f)
-                if cfg.get("seed") == job.seed and (mtime := config_file.stat().st_mtime) > latest_time:
-                    latest_time, latest_dir = mtime, subdir
-            except (json.JSONDecodeError, KeyError):
-                continue
-
-    if latest_dir is None:
-        return None, {}
-
+def extract_metrics_from_log_dir(log_dir: Path) -> Dict[str, float]:
+    """Extract metrics from experiment_config.json in the log directory."""
     metrics = {}
+    config_file = log_dir / "experiment_config.json"
+    if not config_file.exists():
+        return metrics
     try:
-        with open(latest_dir / "experiment_config.json") as f:
+        with open(config_file) as f:
             test_results = json.load(f).get("test_results", {})
-        if "relative_l2_error" in test_results: metrics["rel_l2_error"] = test_results["relative_l2_error"]
-        if "mse_loss" in test_results: metrics["mse_loss"] = test_results["mse_loss"]
-    except: pass
-    return str(latest_dir), metrics
+        if "relative_l2_error" in test_results:
+            metrics["rel_l2_error"] = test_results["relative_l2_error"]
+        if "mse_loss" in test_results:
+            metrics["mse_loss"] = test_results["mse_loss"]
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return metrics
 
 
 def run_jobs_parallel(jobs: List[Job], config: Dict[str, Any], benchmarks_dir: Path,
-                      project_root: Path, run_output_dir: Path) -> List[JobResult]:
+                      project_root: Path, logs_all_dir: Path) -> List[JobResult]:
     """Run jobs in parallel across GPUs."""
     devices = config['devices']
     continue_on_failure = config.get('continue_on_failure', True)
@@ -167,7 +179,7 @@ def run_jobs_parallel(jobs: List[Job], config: Dict[str, Any], benchmarks_dir: P
 
     logging.info(f"Running {len(jobs)} jobs across {len(devices)} GPU(s)")
     with ProcessPoolExecutor(max_workers=len(devices)) as executor:
-        futures = {executor.submit(run_single_job, job, benchmarks_dir, project_root, run_output_dir): job
+        futures = {executor.submit(run_single_job, job, benchmarks_dir, project_root, logs_all_dir): job
                    for job in jobs}
         for future in as_completed(futures):
             try:
@@ -188,7 +200,6 @@ def aggregate_results(results: List[JobResult], output_dir: Path) -> None:
     failed = [r for r in results if not r.success]
     logging.info(f"Aggregating {len(successful)} successful, {len(failed)} failed")
 
-    # Individual results CSV
     with open(output_dir / "results_individual.csv", 'w', newline='') as f:
         w = csv.DictWriter(f, ["model", "benchmark", "seed", "device", "success", "rel_l2_error", "mse_loss", "duration_seconds", "log_dir", "error"])
         w.writeheader()
@@ -200,7 +211,6 @@ def aggregate_results(results: List[JobResult], output_dir: Path) -> None:
                        "duration_seconds": f"{r.duration_seconds:.1f}",
                        "log_dir": r.log_dir or "", "error": r.error_message or ""})
 
-    # Summary by (model, benchmark)
     grouped: Dict[Tuple[str, str], List[JobResult]] = defaultdict(list)
     for r in successful:
         grouped[(r.job.model, r.job.benchmark)].append(r)
@@ -221,10 +231,158 @@ def aggregate_results(results: List[JobResult], output_dir: Path) -> None:
                             "rel_l2": {"mean": mean(l2) if l2 else None, "std": stdev(l2) if len(l2) > 1 else 0.0},
                             "mse": {"mean": mean(mse) if mse else None, "std": stdev(mse) if len(mse) > 1 else 0.0}})
 
-    # JSON summary
     with open(output_dir / "results_summary.json", 'w') as f:
         json.dump({"timestamp": datetime.now().isoformat(), "total": len(results),
                    "successful": len(successful), "failed": len(failed), "aggregated": agg_data}, f, indent=2)
 
+    # Generate pivot tables (models × benchmarks)
+    _generate_pivot_tables(grouped, output_dir)
     logging.info(f"Results saved to: {output_dir}")
 
+
+def _generate_pivot_tables(grouped: Dict[Tuple[str, str], List], output_dir: Path) -> None:
+    """Generate pivot-style result tables in CSV and LaTeX formats."""
+    # Collect all models and benchmarks
+    models = sorted(set(m for m, _ in grouped.keys()))
+    benchmarks = sorted(set(b for _, b in grouped.keys()))
+    
+    # Build data matrices
+    mse_data, l2_data = {}, {}
+    for (model, bench), group in grouped.items():
+        l2_vals = [r.metrics["rel_l2_error"] for r in group if "rel_l2_error" in r.metrics]
+        mse_vals = [r.metrics["mse_loss"] for r in group if "mse_loss" in r.metrics]
+        
+        if l2_vals:
+            l2_mean, l2_std = mean(l2_vals), stdev(l2_vals) if len(l2_vals) > 1 else 0.0
+            l2_data[(model, bench)] = (l2_mean, l2_std)
+        if mse_vals:
+            mse_mean, mse_std = mean(mse_vals), stdev(mse_vals) if len(mse_vals) > 1 else 0.0
+            mse_data[(model, bench)] = (mse_mean, mse_std)
+    
+    # Write CSV pivot tables
+    _write_pivot_csv(output_dir / "results_l2.csv", models, benchmarks, l2_data, "{:.6f}")
+    _write_pivot_csv(output_dir / "results_mse.csv", models, benchmarks, mse_data, "{:.2e}")
+    
+    # Write LaTeX tables
+    _write_pivot_latex(output_dir / "results_l2.tex", models, benchmarks, l2_data, "{:.6f}", "Relative L2 Error")
+    _write_pivot_latex(output_dir / "results_mse.tex", models, benchmarks, mse_data, "{:.2e}", "MSE Loss")
+
+
+def _write_pivot_csv(path: Path, models: List[str], benchmarks: List[str], 
+                     data: Dict[Tuple[str, str], Tuple[float, float]], fmt: str) -> None:
+    """Write pivot table to CSV."""
+    with open(path, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(["model"] + benchmarks)
+        for model in models:
+            row = [model]
+            for bench in benchmarks:
+                if (model, bench) in data:
+                    m, s = data[(model, bench)]
+                    row.append(f"{fmt.format(m)} ± {fmt.format(s)}")
+                else:
+                    row.append("N/A")
+            w.writerow(row)
+
+
+def _write_pivot_latex(path: Path, models: List[str], benchmarks: List[str],
+                       data: Dict[Tuple[str, str], Tuple[float, float]], fmt: str, caption: str) -> None:
+    """Write pivot table to LaTeX."""
+    with open(path, 'w') as f:
+        ncols = len(benchmarks) + 1
+        f.write("\\begin{table}[htbp]\n\\centering\n")
+        f.write(f"\\caption{{{caption}}}\n")
+        f.write("\\begin{tabular}{l" + "c" * len(benchmarks) + "}\n\\toprule\n")
+        f.write("Model & " + " & ".join(b.replace("_", "\\_") for b in benchmarks) + " \\\\\n\\midrule\n")
+        for model in models:
+            row = [model.replace("_", "\\_")]
+            for bench in benchmarks:
+                if (model, bench) in data:
+                    m, s = data[(model, bench)]
+                    row.append(f"${fmt.format(m)} \\pm {fmt.format(s)}$")
+                else:
+                    row.append("N/A")
+            f.write(" & ".join(row) + " \\\\\n")
+        f.write("\\bottomrule\n\\end{tabular}\n\\end{table}\n")
+
+
+def generate_all_configs(benchmarks_dir: Path) -> Dict[str, Any]:
+    """Generate complete configs for all (model_variant, benchmark) pairs."""
+    configs = {}
+    for model_name, variant in MODEL_VARIANTS.items():
+        base_model, variant_overrides = variant["base"], variant.get("overrides", {})
+        scripts = SETONET_SCRIPTS if base_model == "setonet" else DEEPONET_SCRIPTS
+        model_configs = {}
+        for benchmark, script_name in scripts.items():
+            bench_config = load_benchmark_config(benchmarks_dir, base_model, benchmark)
+            config = {**bench_config, **variant_overrides, "_script": script_name, "_base_model": base_model}
+            model_configs[benchmark] = config
+        if model_configs:
+            configs[model_name] = model_configs
+    return configs
+
+
+def count_parameters(model) -> int:
+    """Count trainable parameters in a model."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def generate_param_table(benchmarks_dir: Path) -> Dict[str, Dict[str, int]]:
+    """Generate parameter counts for all (model, benchmark) pairs."""
+    project_root = benchmarks_dir.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    
+    from Models.SetONet import SetONet
+    from Models.DeepONet import DeepONetWrapper
+
+    param_table = {}
+    for model_name, variant in MODEL_VARIANTS.items():
+        base_model = variant["base"]
+        variant_overrides = variant.get("overrides", {})
+        scripts = SETONET_SCRIPTS if base_model == "setonet" else DEEPONET_SCRIPTS
+        model_params = {}
+        
+        for benchmark in scripts.keys():
+            if benchmark not in BENCHMARK_DIMS:
+                continue
+            dims = BENCHMARK_DIMS[benchmark]
+            cfg = load_benchmark_config(benchmarks_dir, base_model, benchmark)
+            cfg.update(variant_overrides)
+            
+            try:
+                if base_model == "setonet":
+                    model = SetONet(
+                        input_size_src=dims[0], output_size_src=dims[1],
+                        input_size_tgt=dims[2], output_size_tgt=dims[3],
+                        p=cfg.get("son_p_dim", 32),
+                        phi_hidden_size=cfg.get("son_phi_hidden", 256),
+                        rho_hidden_size=cfg.get("son_rho_hidden", 256),
+                        trunk_hidden_size=cfg.get("son_trunk_hidden", 256),
+                        n_trunk_layers=cfg.get("son_n_trunk_layers", 4),
+                        phi_output_size=cfg.get("son_phi_output_size", 32),
+                        pos_encoding_type=cfg.get("pos_encoding_type", "sinusoidal"),
+                        pos_encoding_dim=cfg.get("pos_encoding_dim", 64),
+                        aggregation_type=cfg.get("son_aggregation", "attention"),
+                        branch_head_type=cfg.get("son_branch_head_type", "standard"),
+                        adapt_quad_rank=cfg.get("son_adapt_quad_rank", 4),
+                        adapt_quad_hidden=cfg.get("son_adapt_quad_hidden", 64),
+                    )
+                else:
+                    sensor_size = cfg.get("sensor_size", 300)
+                    model = DeepONetWrapper(
+                        branch_input_dim=sensor_size, trunk_input_dim=dims[2],
+                        p=cfg.get("don_p_dim", 32),
+                        trunk_hidden_size=cfg.get("don_trunk_hidden", 256),
+                        n_trunk_layers=cfg.get("don_n_trunk_layers", 4),
+                        branch_hidden_size=cfg.get("don_branch_hidden", 128),
+                        n_branch_layers=cfg.get("don_n_branch_layers", 3),
+                    )
+                model_params[benchmark] = count_parameters(model)
+            except Exception as e:
+                print(f"Warning: Could not create {model_name}/{benchmark}: {e}")
+                model_params[benchmark] = -1
+        
+        if model_params:
+            param_table[model_name] = model_params
+    return param_table

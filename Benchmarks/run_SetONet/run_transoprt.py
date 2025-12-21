@@ -97,14 +97,20 @@ def parse_arguments():
     parser.add_argument('--tb_eval_frequency', type=int, default=1000, help='How often to evaluate on test set for TensorBoard logging (in steps)')
     parser.add_argument('--tb_test_samples', type=int, default=100, help='Number of test samples to use for TensorBoard evaluation')
     
+    # Logging directory (overrides default if provided)
+    parser.add_argument('--log_dir', type=str, default=None, help='Custom log directory (overrides default timestamped dir)')
+    
     return parser.parse_args()
 
-def setup_logging(project_root):
-    """Setup logging directory."""
-    logs_base_in_project = os.path.join(project_root, "logs")
-    model_folder_name = "SetONet_transport"
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
+def setup_logging(project_root, custom_log_dir=None):
+    """Setup logging directory or use custom directory."""
+    if custom_log_dir:
+        log_dir = custom_log_dir
+    else:
+        logs_base_in_project = os.path.join(project_root, "logs")
+        model_folder_name = "SetONet_transport"
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
     print(f"Logging to: {log_dir}")
     return log_dir
@@ -255,7 +261,7 @@ def main():
     torch.backends.cudnn.benchmark = False
     
     # Setup logging
-    log_dir = setup_logging(project_root)
+    log_dir = setup_logging(project_root, args.log_dir)
     
     # Load dataset using the transport dataset loader
     dataset, transport_dataset = load_transport_dataset(
