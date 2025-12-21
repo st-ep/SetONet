@@ -173,6 +173,7 @@ Thumbs.db
 *.npz
 *.png
 *.json
+*.csv
 *.arrow
 *.mat
 *.0

@@ -17,22 +17,34 @@ import yaml
 
 # Script mappings
 SETONET_SCRIPTS = {
-    "heat_2d": "run_heat_2d.py", "elastic_2d": "run_elastic_2d.py",
-    "darcy_1d": "run_darcy_1d.py", "1d": "run_1d.py",
-    "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py",
+    "heat_2d": "run_heat_2d.py", "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py",
+    "elastic_2d": "run_elastic_2d.py", "elastic_2d_robust_train": "run_elastic_2d.py", "elastic_2d_robust_eval": "run_elastic_2d.py",
+    "darcy_1d": "run_darcy_1d.py", "darcy_1d_robust_train": "run_darcy_1d.py", "darcy_1d_robust_eval": "run_darcy_1d.py",
+    "1d_integral": "run_1d.py", "1d_integral_varsens": "run_1d.py", "1d_integral_robust": "run_1d.py",
+    "1d_derivative": "run_1d.py", "1d_derivative_varsens": "run_1d.py", "1d_derivative_robust": "run_1d.py",
 }
 DEEPONET_SCRIPTS = {
-    "elastic_2d": "run_elastic_2d_don.py", "darcy_1d": "run_darcy_1d_don.py", "1d": "run_1d_don.py",
+    "elastic_2d": "run_elastic_2d_don.py", "elastic_2d_robust_train": "run_elastic_2d_don.py", "elastic_2d_robust_eval": "run_elastic_2d_don.py",
+    "darcy_1d": "run_darcy_1d_don.py", "darcy_1d_robust_train": "run_darcy_1d_don.py", "darcy_1d_robust_eval": "run_darcy_1d_don.py",
+    "1d_integral": "run_1d_don.py", "1d_integral_varsens": "run_1d_don.py", "1d_integral_robust": "run_1d_don.py",
+    "1d_derivative": "run_1d_don.py", "1d_derivative_varsens": "run_1d_don.py", "1d_derivative_robust": "run_1d_don.py",
 }
 
 # Maps (base_model, benchmark) to config file
 BENCHMARK_CONFIG_MAP = {
     "setonet": {
-        "1d": "setonet_1d.yaml", "darcy_1d": "setonet_1d.yaml",
-        "heat_2d": "setonet_heat2d.yaml", "concentration_2d": "setonet_heat2d.yaml",
-        "transport": "setonet_heat2d.yaml", "elastic_2d": "setonet_elastic2d.yaml",
+        "1d_integral": "setonet_1d.yaml", "1d_integral_varsens": "setonet_1d.yaml", "1d_integral_robust": "setonet_1d.yaml",
+        "1d_derivative": "setonet_1d.yaml", "1d_derivative_varsens": "setonet_1d.yaml", "1d_derivative_robust": "setonet_1d.yaml",
+        "darcy_1d": "setonet_1d.yaml", "darcy_1d_robust_train": "setonet_1d.yaml", "darcy_1d_robust_eval": "setonet_1d.yaml",
+        "heat_2d": "setonet_heat2d.yaml", "concentration_2d": "setonet_heat2d.yaml", "transport": "setonet_heat2d.yaml",
+        "elastic_2d": "setonet_elastic2d.yaml", "elastic_2d_robust_train": "setonet_elastic2d.yaml", "elastic_2d_robust_eval": "setonet_elastic2d.yaml",
     },
-    "deeponet": {"1d": "deeponet_1d.yaml", "darcy_1d": "deeponet_1d.yaml", "elastic_2d": "deeponet_elastic2d.yaml"},
+    "deeponet": {
+        "1d_integral": "deeponet_1d.yaml", "1d_integral_varsens": "deeponet_1d.yaml", "1d_integral_robust": "deeponet_1d.yaml",
+        "1d_derivative": "deeponet_1d.yaml", "1d_derivative_varsens": "deeponet_1d.yaml", "1d_derivative_robust": "deeponet_1d.yaml",
+        "darcy_1d": "deeponet_1d.yaml", "darcy_1d_robust_train": "deeponet_1d.yaml", "darcy_1d_robust_eval": "deeponet_1d.yaml",
+        "elastic_2d": "deeponet_elastic2d.yaml", "elastic_2d_robust_train": "deeponet_elastic2d.yaml", "elastic_2d_robust_eval": "deeponet_elastic2d.yaml",
+    },
 }
 
 # Model variant definitions
@@ -49,9 +61,11 @@ MODEL_VARIANTS = {
 
 # Benchmark dimensions: (input_size_src, output_size_src, input_size_tgt, output_size_tgt)
 BENCHMARK_DIMS = {
-    "1d": (1, 1, 1, 1), "darcy_1d": (1, 1, 1, 1),
-    "heat_2d": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "elastic_2d": (2, 1, 2, 1),
-    "transport": (2, 1, 2, 2),
+    "1d_integral": (1, 1, 1, 1), "1d_integral_varsens": (1, 1, 1, 1), "1d_integral_robust": (1, 1, 1, 1),
+    "1d_derivative": (1, 1, 1, 1), "1d_derivative_varsens": (1, 1, 1, 1), "1d_derivative_robust": (1, 1, 1, 1),
+    "darcy_1d": (1, 1, 1, 1), "darcy_1d_robust_train": (1, 1, 1, 1), "darcy_1d_robust_eval": (1, 1, 1, 1),
+    "heat_2d": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "transport": (2, 1, 2, 2),
+    "elastic_2d": (2, 1, 2, 1), "elastic_2d_robust_train": (2, 1, 2, 1), "elastic_2d_robust_eval": (2, 1, 2, 1),
 }
 
 
@@ -121,6 +135,28 @@ def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, logs_all_
 
         cmd = [sys.executable, str(script_path), "--seed", str(job.seed), "--device", job.device,
                "--log_dir", str(job_log_dir)]
+        
+        # Handle 1d benchmarks which require --benchmark argument and variant-specific flags
+        if job.benchmark.startswith("1d_"):
+            # Parse: 1d_integral, 1d_integral_varsens, 1d_integral_robust, etc.
+            parts = job.benchmark.split("_")
+            benchmark_type = parts[1]  # "integral" or "derivative"
+            cmd.extend(["--benchmark", benchmark_type])
+            
+            # Handle variants
+            if len(parts) > 2:
+                variant = parts[2]
+                if variant == "varsens":
+                    cmd.append("--variable_sensors")
+                elif variant == "robust":
+                    cmd.extend(["--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
+        
+        # Handle robust variants for elastic_2d and darcy_1d
+        if job.benchmark.endswith("_robust_train"):
+            cmd.extend(["--train_sensor_dropoff", "0.2", "--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
+        elif job.benchmark.endswith("_robust_eval"):
+            cmd.extend(["--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
+        
         for key, value in job.overrides.items():
             if isinstance(value, bool):
                 if value: cmd.append(f"--{key}")

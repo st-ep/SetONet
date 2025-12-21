@@ -74,6 +74,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Multi-seed benchmark runner")
     p.add_argument("--config", "-c", default="Benchmarks/benchmark_config.yaml", help="YAML config path")
     p.add_argument("--dry-run", "-n", action="store_true", help="Show jobs without executing")
+    p.add_argument("--check-run", action="store_true", help="Quick test run with 10 epochs per job")
     p.add_argument("--seeds", help="Override seeds (comma-separated)")
     p.add_argument("--benchmarks", help="Override benchmarks (comma-separated)")
     p.add_argument("--models", choices=["setonet", "deeponet", "both"], help="Filter models")
@@ -144,6 +145,15 @@ def main():
         print("No jobs to run.")
         sys.exit(0)
 
+    # Apply check-run override (10 epochs for quick validation)
+    if args.check_run:
+        logging.info("CHECK RUN: Overriding to 10 epochs per job")
+        for job in jobs:
+            if job.base_model == "setonet":
+                job.overrides["son_epochs"] = 10
+            else:
+                job.overrides["don_epochs"] = 10
+
     # Use custom output dir or default logs_all
     if args.output_dir:
         logs_all_dir = Path(args.output_dir)
@@ -154,7 +164,8 @@ def main():
     save_configs_and_param_table(script_dir, results_dir)
 
     if args.dry_run:
-        print(f"\nDRY RUN - {len(jobs)} jobs:\n")
+        mode = "CHECK RUN (10 epochs)" if args.check_run else "DRY RUN"
+        print(f"\n{mode} - {len(jobs)} jobs:\n")
         print(f"{'#':<4} {'Job ID':<40} {'Device':<12} Log Dir")
         print("-" * 90)
         for i, job in enumerate(jobs, 1):
