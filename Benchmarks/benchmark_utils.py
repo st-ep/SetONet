@@ -48,15 +48,32 @@ BENCHMARK_CONFIG_MAP = {
 }
 
 # Model variant definitions
+# benchmark_overrides: dict mapping benchmark pattern tuples to additional overrides
 MODEL_VARIANTS = {
     "deeponet": {"base": "deeponet", "overrides": {}},
     "setonet_sum": {"base": "setonet", "overrides": {"son_aggregation": "sum"}},
     "setonet_mean": {"base": "setonet", "overrides": {"son_aggregation": "mean"}},
     "setonet_attention": {"base": "setonet", "overrides": {}},
-    "setonet_petrov": {"base": "setonet", "overrides": {"son_branch_head_type": "petrov_attention"}},
-    "setonet_galerkin": {"base": "setonet", "overrides": {"son_branch_head_type": "galerkin_pou"}},
-    "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"}},
-    "setonet_adaptive": {"base": "setonet", "overrides": {"son_branch_head_type": "adaptive_quadrature"}},
+    "setonet_petrov": {"base": "setonet", "overrides": {"son_branch_head_type": "petrov_attention"},
+        "benchmark_overrides": {
+            ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 200},
+            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+        }},
+    "setonet_galerkin": {"base": "setonet", "overrides": {"son_branch_head_type": "galerkin_pou"},
+        "benchmark_overrides": {
+            ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 200},
+            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+        }},
+    "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"},
+        "benchmark_overrides": {
+            ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 200},
+            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+        }},
+    "setonet_adaptive": {"base": "setonet", "overrides": {"son_branch_head_type": "adaptive_quadrature"},
+        "benchmark_overrides": {
+            ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 185},
+            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 175},
+        }},
 }
 
 # Benchmark dimensions: (input_size_src, output_size_src, input_size_tgt, output_size_tgt)
@@ -206,6 +223,39 @@ def extract_metrics_from_log_dir(log_dir: Path) -> Dict[str, float]:
     return metrics
 
 
+def scan_all_results(logs_all_dir: Path) -> Dict[Tuple[str, str, int], Dict[str, float]]:
+    """Scan all existing experiment results in logs_all directory.
+    
+    Returns dict mapping (model, benchmark, seed) -> metrics
+    """
+    all_results = {}
+    
+    # Walk through logs_all/<benchmark>/<model>/seed_<X>/experiment_config.json
+    for benchmark_dir in logs_all_dir.iterdir():
+        if not benchmark_dir.is_dir() or benchmark_dir.name.startswith("_"):
+            continue  # Skip _results and non-directories
+        benchmark = benchmark_dir.name
+        
+        for model_dir in benchmark_dir.iterdir():
+            if not model_dir.is_dir():
+                continue
+            model = model_dir.name
+            
+            for seed_dir in model_dir.iterdir():
+                if not seed_dir.is_dir() or not seed_dir.name.startswith("seed_"):
+                    continue
+                try:
+                    seed = int(seed_dir.name.split("_")[1])
+                except (IndexError, ValueError):
+                    continue
+                
+                metrics = extract_metrics_from_log_dir(seed_dir)
+                if metrics:
+                    all_results[(model, benchmark, seed)] = metrics
+    
+    return all_results
+
+
 def run_jobs_parallel(jobs: List[Job], config: Dict[str, Any], benchmarks_dir: Path,
                       project_root: Path, logs_all_dir: Path) -> List[JobResult]:
     """Run jobs in parallel across GPUs."""
@@ -230,12 +280,17 @@ def run_jobs_parallel(jobs: List[Job], config: Dict[str, Any], benchmarks_dir: P
     return results
 
 
-def aggregate_results(results: List[JobResult], output_dir: Path) -> None:
-    """Aggregate results and save to CSV and JSON."""
+def aggregate_results(results: List[JobResult], output_dir: Path, logs_all_dir: Path = None) -> None:
+    """Aggregate results and save to CSV and JSON.
+    
+    If logs_all_dir is provided, scans all existing results and merges with current run.
+    Current run results take precedence over historical results.
+    """
     successful = [r for r in results if r.success and r.metrics]
     failed = [r for r in results if not r.success]
-    logging.info(f"Aggregating {len(successful)} successful, {len(failed)} failed")
+    logging.info(f"Current run: {len(successful)} successful, {len(failed)} failed")
 
+    # Save individual results from current run
     with open(output_dir / "results_individual.csv", 'w', newline='') as f:
         w = csv.DictWriter(f, ["model", "benchmark", "seed", "device", "success", "rel_l2_error", "mse_loss", "duration_seconds", "log_dir", "error"])
         w.writeheader()
@@ -247,46 +302,63 @@ def aggregate_results(results: List[JobResult], output_dir: Path) -> None:
                        "duration_seconds": f"{r.duration_seconds:.1f}",
                        "log_dir": r.log_dir or "", "error": r.error_message or ""})
 
-    grouped: Dict[Tuple[str, str], List[JobResult]] = defaultdict(list)
+    # Build combined metrics: start with historical, then overlay current (current takes precedence)
+    combined_metrics: Dict[Tuple[str, str, int], Dict[str, float]] = {}
+    
+    if logs_all_dir and logs_all_dir.exists():
+        # Scan all historical results
+        historical = scan_all_results(logs_all_dir)
+        combined_metrics.update(historical)
+        logging.info(f"Found {len(historical)} historical results in {logs_all_dir}")
+    
+    # Overlay current run results (takes precedence)
     for r in successful:
-        grouped[(r.job.model, r.job.benchmark)].append(r)
+        combined_metrics[(r.job.model, r.job.benchmark, r.job.seed)] = r.metrics
+    
+    logging.info(f"Total combined results: {len(combined_metrics)}")
+
+    # Group by (model, benchmark) for aggregation
+    grouped: Dict[Tuple[str, str], List[Dict[str, float]]] = defaultdict(list)
+    for (model, bench, seed), metrics in combined_metrics.items():
+        grouped[(model, bench)].append(metrics)
 
     agg_data = []
     with open(output_dir / "results_summary.csv", 'w', newline='') as f:
         w = csv.DictWriter(f, ["model", "benchmark", "n_seeds", "rel_l2_mean", "rel_l2_std", "mse_mean", "mse_std"])
         w.writeheader()
-        for (model, bench), group in sorted(grouped.items()):
-            l2 = [r.metrics["rel_l2_error"] for r in group if "rel_l2_error" in r.metrics]
-            mse = [r.metrics["mse_loss"] for r in group if "mse_loss" in r.metrics]
-            w.writerow({"model": model, "benchmark": bench, "n_seeds": len(group),
+        for (model, bench), metrics_list in sorted(grouped.items()):
+            l2 = [m["rel_l2_error"] for m in metrics_list if "rel_l2_error" in m]
+            mse = [m["mse_loss"] for m in metrics_list if "mse_loss" in m]
+            w.writerow({"model": model, "benchmark": bench, "n_seeds": len(metrics_list),
                        "rel_l2_mean": f"{mean(l2):.6f}" if l2 else "",
                        "rel_l2_std": f"{stdev(l2):.6f}" if len(l2) > 1 else "0.0",
                        "mse_mean": f"{mean(mse):.6e}" if mse else "",
                        "mse_std": f"{stdev(mse):.6e}" if len(mse) > 1 else "0.0"})
-            agg_data.append({"model": model, "benchmark": bench, "n_seeds": len(group),
+            agg_data.append({"model": model, "benchmark": bench, "n_seeds": len(metrics_list),
                             "rel_l2": {"mean": mean(l2) if l2 else None, "std": stdev(l2) if len(l2) > 1 else 0.0},
                             "mse": {"mean": mean(mse) if mse else None, "std": stdev(mse) if len(mse) > 1 else 0.0}})
 
     with open(output_dir / "results_summary.json", 'w') as f:
-        json.dump({"timestamp": datetime.now().isoformat(), "total": len(results),
-                   "successful": len(successful), "failed": len(failed), "aggregated": agg_data}, f, indent=2)
+        json.dump({"timestamp": datetime.now().isoformat(), "total_combined": len(combined_metrics),
+                   "current_run_successful": len(successful), "current_run_failed": len(failed), 
+                   "aggregated": agg_data}, f, indent=2)
 
-    # Generate pivot tables (models × benchmarks)
-    _generate_pivot_tables(grouped, output_dir)
+    # Generate pivot tables (models × benchmarks) from combined data
+    _generate_pivot_tables_from_metrics(grouped, output_dir)
     logging.info(f"Results saved to: {output_dir}")
 
 
-def _generate_pivot_tables(grouped: Dict[Tuple[str, str], List], output_dir: Path) -> None:
-    """Generate pivot-style result tables in CSV and LaTeX formats."""
+def _generate_pivot_tables_from_metrics(grouped: Dict[Tuple[str, str], List[Dict[str, float]]], output_dir: Path) -> None:
+    """Generate pivot-style result tables in CSV and LaTeX formats from metrics dicts."""
     # Collect all models and benchmarks
     models = sorted(set(m for m, _ in grouped.keys()))
     benchmarks = sorted(set(b for _, b in grouped.keys()))
     
     # Build data matrices
     mse_data, l2_data = {}, {}
-    for (model, bench), group in grouped.items():
-        l2_vals = [r.metrics["rel_l2_error"] for r in group if "rel_l2_error" in r.metrics]
-        mse_vals = [r.metrics["mse_loss"] for r in group if "mse_loss" in r.metrics]
+    for (model, bench), metrics_list in grouped.items():
+        l2_vals = [m["rel_l2_error"] for m in metrics_list if "rel_l2_error" in m]
+        mse_vals = [m["mse_loss"] for m in metrics_list if "mse_loss" in m]
         
         if l2_vals:
             l2_mean, l2_std = mean(l2_vals), stdev(l2_vals) if len(l2_vals) > 1 else 0.0
@@ -342,6 +414,17 @@ def _write_pivot_latex(path: Path, models: List[str], benchmarks: List[str],
         f.write("\\bottomrule\n\\end{tabular}\n\\end{table}\n")
 
 
+def get_benchmark_overrides(variant: Dict[str, Any], benchmark: str) -> Dict[str, Any]:
+    """Get benchmark-specific overrides for a model variant."""
+    bench_overrides = variant.get("benchmark_overrides", {})
+    for patterns, overrides in bench_overrides.items():
+        # patterns is a tuple of prefixes/names to match
+        for pattern in patterns:
+            if benchmark.startswith(pattern) or benchmark == pattern:
+                return overrides
+    return {}
+
+
 def generate_all_configs(benchmarks_dir: Path) -> Dict[str, Any]:
     """Generate complete configs for all (model_variant, benchmark) pairs."""
     configs = {}
@@ -351,7 +434,8 @@ def generate_all_configs(benchmarks_dir: Path) -> Dict[str, Any]:
         model_configs = {}
         for benchmark, script_name in scripts.items():
             bench_config = load_benchmark_config(benchmarks_dir, base_model, benchmark)
-            config = {**bench_config, **variant_overrides, "_script": script_name, "_base_model": base_model}
+            bench_specific = get_benchmark_overrides(variant, benchmark)
+            config = {**bench_config, **variant_overrides, **bench_specific, "_script": script_name, "_base_model": base_model}
             model_configs[benchmark] = config
         if model_configs:
             configs[model_name] = model_configs
@@ -385,6 +469,7 @@ def generate_param_table(benchmarks_dir: Path) -> Dict[str, Dict[str, int]]:
             dims = BENCHMARK_DIMS[benchmark]
             cfg = load_benchmark_config(benchmarks_dir, base_model, benchmark)
             cfg.update(variant_overrides)
+            cfg.update(get_benchmark_overrides(variant, benchmark))
             
             try:
                 if base_model == "setonet":

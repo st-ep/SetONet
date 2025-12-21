@@ -39,6 +39,17 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
+def get_benchmark_overrides(variant: Dict[str, Any], benchmark: str) -> Dict[str, Any]:
+    """Get benchmark-specific overrides for a model variant."""
+    bench_overrides = variant.get("benchmark_overrides", {})
+    for patterns, overrides in bench_overrides.items():
+        # patterns is a tuple of prefixes/names to match
+        for pattern in patterns:
+            if benchmark.startswith(pattern) or benchmark == pattern:
+                return overrides
+    return {}
+
+
 def build_job_queue(config: Dict[str, Any], benchmarks_dir: Path) -> List[Job]:
     """Build job queue from configuration."""
     jobs = []
@@ -57,8 +68,9 @@ def build_job_queue(config: Dict[str, Any], benchmarks_dir: Path) -> List[Job]:
                 continue
 
             bench_config = load_benchmark_config(benchmarks_dir, base_model, benchmark)
+            bench_specific = get_benchmark_overrides(variant, benchmark)
             for seed in seeds:
-                overrides = {**bench_config, **variant_overrides}
+                overrides = {**bench_config, **variant_overrides, **bench_specific}
                 if benchmark in user_overrides:
                     overrides.update(user_overrides[benchmark])
                 if f"{model_name}_{benchmark}" in user_overrides:
@@ -178,7 +190,7 @@ def main():
     logging.info(f"Starting {len(jobs)} jobs, output: {logs_all_dir}")
     start = time.time()
     results = run_jobs_parallel(jobs, config, script_dir, project_root, logs_all_dir)
-    aggregate_results(results, results_dir)
+    aggregate_results(results, results_dir, logs_all_dir)
     logging.info(f"Total time: {(time.time() - start) / 60:.1f} min")
 
 

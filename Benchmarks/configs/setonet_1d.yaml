@@ -4,7 +4,7 @@
 # Model architecture
 son_p_dim: 32
 son_phi_hidden: 256
-son_rho_hidden: 256
+son_rho_hidden: 300
 son_trunk_hidden: 256
 son_n_trunk_layers: 4
 son_phi_output_size: 32
@@ -16,8 +16,12 @@ son_branch_head_type: standard
 
 # Branch head options (for advanced variants)
 son_pg_no_logw: false
-son_galerkin_normalize: total
+son_galerkin_dk: 32
+son_galerkin_dv: 32
+son_galerkin_normalize: token
 son_galerkin_learn_temperature: false
+son_quad_dk: 32
+son_quad_dv: 32
 son_adapt_quad_rank: 4
 son_adapt_quad_hidden: 64
 son_adapt_quad_scale: 0.1
