@@ -1,0 +1,28 @@
+# DeepONet configuration for 1D benchmarks: 1d, darcy_1d
+# These benchmarks share the same hyperparameters
+
+# Model architecture
+don_p_dim: 32
+don_trunk_hidden: 256
+don_n_trunk_layers: 4
+don_branch_hidden: 128
+don_n_branch_layers: 3
+activation_fn: relu
+
+# Training
+don_lr: 0.0005
+don_epochs: 125000
+batch_size: 64
+lr_schedule_steps: [25000, 75000, 125000, 175000, 1250000, 1500000]
+lr_schedule_gammas: [0.2, 0.5, 0.2, 0.5, 0.2, 0.5]
+
+# Sensor settings
+eval_sensor_dropoff: 0.0
+train_sensor_dropoff: 0.0
+n_test_samples_eval: 1000
+
+# TensorBoard
+enable_tensorboard: true
+tb_eval_frequency: 1000
+tb_test_samples: 100
+
