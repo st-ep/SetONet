@@ -313,6 +313,8 @@ def create_synthetic_setonet_model(args, device):
         pg_use_logw=(not getattr(args, "son_pg_no_logw", False)),
         galerkin_dk=getattr(args, "son_galerkin_dk", None),
         galerkin_dv=getattr(args, "son_galerkin_dv", None),
+        quad_dk=getattr(args, "son_quad_dk", None),
+        quad_dv=getattr(args, "son_quad_dv", None),
         galerkin_normalize=getattr(args, "son_galerkin_normalize", "total"),
         galerkin_learn_temperature=getattr(args, "son_galerkin_learn_temperature", False),
         adapt_quad_rank=getattr(args, "son_adapt_quad_rank", 4),

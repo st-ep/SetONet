@@ -1,0 +1,157 @@
+# =============================================================================
+# Benchmark Configuration File
+# =============================================================================
+# Edit this file to control which experiments to run.
+# Comment out items you don't want to run with #
+
+# -----------------------------------------------------------------------------
+# Seeds to run for each (model, benchmark) combination
+# -----------------------------------------------------------------------------
+seeds: [0, 1, 2, 3, 4]
+
+# -----------------------------------------------------------------------------
+# GPU devices for parallel execution
+# Jobs are distributed round-robin across available devices
+# -----------------------------------------------------------------------------
+devices: ["cuda:0", "cuda:1"]
+
+# -----------------------------------------------------------------------------
+# Model Variants
+# -----------------------------------------------------------------------------
+# Available variants:
+#   - deeponet            : DeepONet baseline
+#   - setonet_sum         : SetONet with sum aggregation
+#   - setonet_mean        : SetONet with mean aggregation
+#   - setonet_attention   : SetONet with attention aggregation (DEFAULT)
+#   - setonet_petrov      : SetONet with Petrov-Galerkin attention head
+#   - setonet_galerkin    : SetONet with Galerkin partition-of-unity head
+#   - setonet_quadrature  : SetONet with quadrature head
+#   - setonet_adaptive    : SetONet with adaptive quadrature head
+#
+# Available benchmarks for SetONet variants:
+#   heat_2d, elastic_2d, darcy_1d, chladni_2d, 1d,
+#   concentration_2d, transport, dynamic_chladni
+#
+# Available benchmarks for DeepONet:
+#   elastic_2d, darcy_1d, chladni_2d, 1d
+# -----------------------------------------------------------------------------
+models:
+  # === DeepONet Baseline ===
+  deeponet:
+    enabled: true
+    benchmarks:
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+
+  # === SetONet Default (attention aggregation) ===
+  setonet_attention:
+    enabled: true
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+  # === SetONet with Sum Aggregation ===
+  setonet_sum:
+    enabled: false
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+  # === SetONet with Mean Aggregation ===
+  setonet_mean:
+    enabled: false
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+  # === SetONet with Petrov-Galerkin Attention Head ===
+  setonet_petrov:
+    enabled: false
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+  # === SetONet with Galerkin Partition-of-Unity Head ===
+  setonet_galerkin:
+    enabled: false
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+  # === SetONet with Quadrature Head ===
+  setonet_quadrature:
+    enabled: false
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+  # === SetONet with Adaptive Quadrature Head ===
+  setonet_adaptive:
+    enabled: false
+    benchmarks:
+      - heat_2d
+      - elastic_2d
+      - darcy_1d
+      - chladni_2d
+      - 1d
+      - concentration_2d
+      - transport
+      - dynamic_chladni
+
+# -----------------------------------------------------------------------------
+# Optional parameter overrides
+# -----------------------------------------------------------------------------
+# Keys are benchmark names or model_benchmark combos (e.g., setonet_attention_heat_2d)
+# Leave empty or omit to use script defaults.
+overrides:
+  # Example: reduce epochs for all heat_2d runs
+  # heat_2d:
+  #   son_epochs: 50000
+  
+  # Example: override for a specific model variant + benchmark
+  # setonet_petrov_elastic_2d:
+  #   son_epochs: 100000
+
+# -----------------------------------------------------------------------------
+# Advanced settings
+# -----------------------------------------------------------------------------
+continue_on_failure: true
+log_level: INFO

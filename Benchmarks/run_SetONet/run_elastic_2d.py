@@ -56,6 +56,8 @@ def parse_arguments():
     )
     parser.add_argument('--son_galerkin_dk', type=int, default=None, help='Galerkin PoU key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
+    parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
+    parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
     parser.add_argument(
         '--son_galerkin_normalize',
         type=str,
@@ -153,6 +155,8 @@ def create_model(args, device):
         pg_use_logw=(not args.son_pg_no_logw),
         galerkin_dk=args.son_galerkin_dk,
         galerkin_dv=args.son_galerkin_dv,
+        quad_dk=args.son_quad_dk,
+        quad_dv=args.son_quad_dv,
         galerkin_normalize=args.son_galerkin_normalize,
         galerkin_learn_temperature=args.son_galerkin_learn_temperature,
         adapt_quad_rank=args.son_adapt_quad_rank,

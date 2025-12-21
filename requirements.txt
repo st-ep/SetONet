@@ -11,6 +11,9 @@ torchaudio>=0.9.0
 datasets>=2.0.0
 pathlib2>=2.3.0  # For pathlib if using older Python
 
+# Configuration files
+PyYAML>=6.0.0
+
 # Plotting and visualization
 matplotlib>=3.3.0
 seaborn>=0.11.0
