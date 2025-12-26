@@ -17,7 +17,8 @@ import yaml
 
 # Script mappings
 SETONET_SCRIPTS = {
-    "heat_2d": "run_heat_2d.py", "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py",
+    "heat_2d_P30": "run_heat_2d.py", "heat_2d_P10": "run_heat_2d.py",
+    "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py",
     "elastic_2d": "run_elastic_2d.py", "elastic_2d_robust_train": "run_elastic_2d.py", "elastic_2d_robust_eval": "run_elastic_2d.py",
     "darcy_1d": "run_darcy_1d.py", "darcy_1d_robust_train": "run_darcy_1d.py", "darcy_1d_robust_eval": "run_darcy_1d.py",
     "1d_integral": "run_1d.py", "1d_integral_varsens": "run_1d.py", "1d_integral_robust": "run_1d.py",
@@ -29,6 +30,14 @@ DEEPONET_SCRIPTS = {
     "1d_integral": "run_1d_don.py", "1d_integral_varsens": "run_1d_don.py", "1d_integral_robust": "run_1d_don.py",
     "1d_derivative": "run_1d_don.py", "1d_derivative_varsens": "run_1d_don.py", "1d_derivative_robust": "run_1d_don.py",
 }
+VIDON_SCRIPTS = {
+    "heat_2d_P30": "run_heat_2d_vidon.py", "heat_2d_P10": "run_heat_2d_vidon.py",
+    "concentration_2d": "run_consantration_2d_vidon.py", "transport": "run_transoprt_vidon.py",
+    "elastic_2d": "run_elastic_2d_vidon.py", "elastic_2d_robust_train": "run_elastic_2d_vidon.py", "elastic_2d_robust_eval": "run_elastic_2d_vidon.py",
+    "darcy_1d": "run_darcy_1d_vidon.py", "darcy_1d_robust_train": "run_darcy_1d_vidon.py", "darcy_1d_robust_eval": "run_darcy_1d_vidon.py",
+    "1d_integral": "run_1d_vidon.py", "1d_integral_varsens": "run_1d_vidon.py", "1d_integral_robust": "run_1d_vidon.py",
+    "1d_derivative": "run_1d_vidon.py", "1d_derivative_varsens": "run_1d_vidon.py", "1d_derivative_robust": "run_1d_vidon.py",
+}
 
 # Maps (base_model, benchmark) to config file
 BENCHMARK_CONFIG_MAP = {
@@ -36,7 +45,8 @@ BENCHMARK_CONFIG_MAP = {
         "1d_integral": "setonet_1d.yaml", "1d_integral_varsens": "setonet_1d.yaml", "1d_integral_robust": "setonet_1d.yaml",
         "1d_derivative": "setonet_1d.yaml", "1d_derivative_varsens": "setonet_1d.yaml", "1d_derivative_robust": "setonet_1d.yaml",
         "darcy_1d": "setonet_1d.yaml", "darcy_1d_robust_train": "setonet_1d.yaml", "darcy_1d_robust_eval": "setonet_1d.yaml",
-        "heat_2d": "setonet_heat2d.yaml", "concentration_2d": "setonet_heat2d.yaml", "transport": "setonet_heat2d.yaml",
+        "heat_2d_P30": "setonet_heat2d.yaml", "heat_2d_P10": "setonet_heat2d.yaml",
+        "concentration_2d": "setonet_heat2d.yaml", "transport": "setonet_heat2d.yaml",
         "elastic_2d": "setonet_elastic2d.yaml", "elastic_2d_robust_train": "setonet_elastic2d.yaml", "elastic_2d_robust_eval": "setonet_elastic2d.yaml",
     },
     "deeponet": {
@@ -45,34 +55,43 @@ BENCHMARK_CONFIG_MAP = {
         "darcy_1d": "deeponet_1d.yaml", "darcy_1d_robust_train": "deeponet_1d.yaml", "darcy_1d_robust_eval": "deeponet_1d.yaml",
         "elastic_2d": "deeponet_elastic2d.yaml", "elastic_2d_robust_train": "deeponet_elastic2d.yaml", "elastic_2d_robust_eval": "deeponet_elastic2d.yaml",
     },
+    "vidon": {
+        "1d_integral": "vidon_1d.yaml", "1d_integral_varsens": "vidon_1d.yaml", "1d_integral_robust": "vidon_1d.yaml",
+        "1d_derivative": "vidon_1d.yaml", "1d_derivative_varsens": "vidon_1d.yaml", "1d_derivative_robust": "vidon_1d.yaml",
+        "darcy_1d": "vidon_1d.yaml", "darcy_1d_robust_train": "vidon_1d.yaml", "darcy_1d_robust_eval": "vidon_1d.yaml",
+        "heat_2d_P30": "vidon_heat2d.yaml", "heat_2d_P10": "vidon_heat2d.yaml",
+        "concentration_2d": "vidon_heat2d.yaml", "transport": "vidon_heat2d.yaml",
+        "elastic_2d": "vidon_elastic2d.yaml", "elastic_2d_robust_train": "vidon_elastic2d.yaml", "elastic_2d_robust_eval": "vidon_elastic2d.yaml",
+    },
 }
 
 # Model variant definitions
 # benchmark_overrides: dict mapping benchmark pattern tuples to additional overrides
 MODEL_VARIANTS = {
     "deeponet": {"base": "deeponet", "overrides": {}},
+    "vidon": {"base": "vidon", "overrides": {}},
     "setonet_sum": {"base": "setonet", "overrides": {"son_aggregation": "sum"}},
     "setonet_mean": {"base": "setonet", "overrides": {"son_aggregation": "mean"}},
     "setonet_attention": {"base": "setonet", "overrides": {}},
     "setonet_petrov": {"base": "setonet", "overrides": {"son_branch_head_type": "petrov_attention"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 200},
-            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 210},
         }},
     "setonet_galerkin": {"base": "setonet", "overrides": {"son_branch_head_type": "galerkin_pou"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 200},
-            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 210},
         }},
     "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 200},
-            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 210},
         }},
     "setonet_adaptive": {"base": "setonet", "overrides": {"son_branch_head_type": "adaptive_quadrature"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_"): {"son_rho_hidden": 185},
-            ("heat_2d", "concentration_2d", "transport"): {"son_rho_hidden": 175},
+            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 175},
         }},
 }
 
@@ -81,7 +100,7 @@ BENCHMARK_DIMS = {
     "1d_integral": (1, 1, 1, 1), "1d_integral_varsens": (1, 1, 1, 1), "1d_integral_robust": (1, 1, 1, 1),
     "1d_derivative": (1, 1, 1, 1), "1d_derivative_varsens": (1, 1, 1, 1), "1d_derivative_robust": (1, 1, 1, 1),
     "darcy_1d": (1, 1, 1, 1), "darcy_1d_robust_train": (1, 1, 1, 1), "darcy_1d_robust_eval": (1, 1, 1, 1),
-    "heat_2d": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "transport": (2, 1, 2, 2),
+    "heat_2d_P30": (2, 1, 2, 1), "heat_2d_P10": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "transport": (2, 1, 2, 2),
     "elastic_2d": (2, 1, 2, 1), "elastic_2d_robust_train": (2, 1, 2, 1), "elastic_2d_robust_eval": (2, 1, 2, 1),
 }
 
@@ -105,8 +124,12 @@ class Job:
 
     def get_script_path(self, benchmarks_dir: Path) -> Path:
         base = self.base_model
-        scripts = SETONET_SCRIPTS if base == "setonet" else DEEPONET_SCRIPTS
-        script_dir = benchmarks_dir / ("run_SetONet" if base == "setonet" else "run_DeepONet")
+        if base == "setonet":
+            scripts, script_dir = SETONET_SCRIPTS, benchmarks_dir / "run_SetONet"
+        elif base == "vidon":
+            scripts, script_dir = VIDON_SCRIPTS, benchmarks_dir / "run_VIDON"
+        else:
+            scripts, script_dir = DEEPONET_SCRIPTS, benchmarks_dir / "run_DeepONet"
         script_name = scripts.get(self.benchmark)
         if script_name is None:
             raise ValueError(f"No script for {self.model}/{self.benchmark}")
@@ -174,6 +197,12 @@ def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, logs_all_
         elif job.benchmark.endswith("_robust_eval"):
             cmd.extend(["--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
         
+        # Handle heat_2d dataset variants
+        if job.benchmark == "heat_2d_P30":
+            cmd.extend(["--data_path", str(project_root / "Data" / "heat_data" / "pcb_heat_adaptive_dataset8.0_n8192_N25_P30")])
+        elif job.benchmark == "heat_2d_P10":
+            cmd.extend(["--data_path", str(project_root / "Data" / "heat_data" / "pcb_heat_adaptive_dataset9.0_n8192_N25_P10")])
+        
         for key, value in job.overrides.items():
             if isinstance(value, bool):
                 if value: cmd.append(f"--{key}")
@@ -213,11 +242,20 @@ def extract_metrics_from_log_dir(log_dir: Path) -> Dict[str, float]:
         return metrics
     try:
         with open(config_file) as f:
-            test_results = json.load(f).get("test_results", {})
-        if "relative_l2_error" in test_results:
-            metrics["rel_l2_error"] = test_results["relative_l2_error"]
-        if "mse_loss" in test_results:
-            metrics["mse_loss"] = test_results["mse_loss"]
+            data = json.load(f)
+        # Check evaluation_results first (DeepONet/SetONet format)
+        eval_results = data.get("evaluation_results", {})
+        if "test_relative_l2_error" in eval_results:
+            metrics["rel_l2_error"] = eval_results["test_relative_l2_error"]
+        if "test_mse_loss" in eval_results:
+            metrics["mse_loss"] = eval_results["test_mse_loss"]
+        # Fallback to test_results format if eval_results empty
+        if not metrics:
+            test_results = data.get("test_results", {})
+            if "relative_l2_error" in test_results:
+                metrics["rel_l2_error"] = test_results["relative_l2_error"]
+            if "mse_loss" in test_results:
+                metrics["mse_loss"] = test_results["mse_loss"]
     except (json.JSONDecodeError, KeyError):
         pass
     return metrics
@@ -430,7 +468,12 @@ def generate_all_configs(benchmarks_dir: Path) -> Dict[str, Any]:
     configs = {}
     for model_name, variant in MODEL_VARIANTS.items():
         base_model, variant_overrides = variant["base"], variant.get("overrides", {})
-        scripts = SETONET_SCRIPTS if base_model == "setonet" else DEEPONET_SCRIPTS
+        if base_model == "setonet":
+            scripts = SETONET_SCRIPTS
+        elif base_model == "vidon":
+            scripts = VIDON_SCRIPTS
+        else:
+            scripts = DEEPONET_SCRIPTS
         model_configs = {}
         for benchmark, script_name in scripts.items():
             bench_config = load_benchmark_config(benchmarks_dir, base_model, benchmark)
@@ -455,12 +498,18 @@ def generate_param_table(benchmarks_dir: Path) -> Dict[str, Dict[str, int]]:
     
     from Models.SetONet import SetONet
     from Models.DeepONet import DeepONetWrapper
+    from Models.VIDON import VIDON
 
     param_table = {}
     for model_name, variant in MODEL_VARIANTS.items():
         base_model = variant["base"]
         variant_overrides = variant.get("overrides", {})
-        scripts = SETONET_SCRIPTS if base_model == "setonet" else DEEPONET_SCRIPTS
+        if base_model == "setonet":
+            scripts = SETONET_SCRIPTS
+        elif base_model == "vidon":
+            scripts = VIDON_SCRIPTS
+        else:
+            scripts = DEEPONET_SCRIPTS
         model_params = {}
         
         for benchmark in scripts.keys():
@@ -488,6 +537,23 @@ def generate_param_table(benchmarks_dir: Path) -> Dict[str, Dict[str, int]]:
                         branch_head_type=cfg.get("son_branch_head_type", "standard"),
                         adapt_quad_rank=cfg.get("son_adapt_quad_rank", 4),
                         adapt_quad_hidden=cfg.get("son_adapt_quad_hidden", 64),
+                    )
+                elif base_model == "vidon":
+                    model = VIDON(
+                        input_size_src=dims[0], output_size_src=dims[1],
+                        input_size_tgt=dims[2], output_size_tgt=dims[3],
+                        p=cfg.get("vidon_p_dim", 32),
+                        n_heads=cfg.get("vidon_n_heads", 4),
+                        d_enc=cfg.get("vidon_d_enc", 40),
+                        head_output_size=cfg.get("vidon_head_output_size", 64),
+                        enc_hidden_size=cfg.get("vidon_enc_hidden", 40),
+                        enc_n_layers=cfg.get("vidon_enc_n_layers", 4),
+                        head_hidden_size=cfg.get("vidon_head_hidden", 128),
+                        head_n_layers=cfg.get("vidon_head_n_layers", 4),
+                        combine_hidden_size=cfg.get("vidon_combine_hidden", 256),
+                        combine_n_layers=cfg.get("vidon_combine_n_layers", 4),
+                        trunk_hidden_size=cfg.get("vidon_trunk_hidden", 256),
+                        n_trunk_layers=cfg.get("vidon_n_trunk_layers", 4),
                     )
                 else:
                     sensor_size = cfg.get("sensor_size", 300)

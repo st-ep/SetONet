@@ -20,6 +20,7 @@ devices: ["cuda:0", "cuda:1"]
 # -----------------------------------------------------------------------------
 # Available models:
 #   - deeponet            : DeepONet baseline
+#   - vidon               : VIDON (Variable-Input Deep Operator Network)
 #   - setonet_sum         : SetONet with sum aggregation
 #   - setonet_mean        : SetONet with mean aggregation
 #   - setonet_attention   : SetONet with attention aggregation (DEFAULT)
@@ -30,13 +31,14 @@ devices: ["cuda:0", "cuda:1"]
 # -----------------------------------------------------------------------------
 models:
   - deeponet
-  - setonet_attention
+#  - vidon
+#  - setonet_attention
   - setonet_sum
   - setonet_mean
   - setonet_petrov
-  - setonet_galerkin
-  - setonet_quadrature
-  - setonet_adaptive
+#  - setonet_galerkin
+#  - setonet_quadrature
+#  - setonet_adaptive
 
 # -----------------------------------------------------------------------------
 # Benchmarks to run
@@ -58,7 +60,8 @@ models:
 #   - *_robust_eval  : eval only with 20% sensor dropout + nearest replacement
 # -----------------------------------------------------------------------------
 benchmarks:
-  - heat_2d
+  - heat_2d_P30
+  - heat_2d_P10
   - elastic_2d
   - elastic_2d_robust_train
   - elastic_2d_robust_eval

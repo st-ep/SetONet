@@ -12,78 +12,56 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import required modules
-from Models.SetONet import SetONet
+from Models.VIDON import VIDON
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.config_utils_vidon import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.concentration_data.concentration_2d_dataset import load_concentration_dataset
 from Plotting.plot_consentration_2d_utils import plot_concentration_results
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train SetONet for 2D concentration problem.")
+    parser = argparse.ArgumentParser(description="Train VIDON for 2D concentration problem.")
     
     # Data parameters
     parser.add_argument('--data_path', type=str, default="Data/concentration_data/chem_plume_adaptive_dataset4.0_n4096_N25_P30", 
                        help='Path to Concentration 2D dataset')
     parser.add_argument('--adaptive_mesh', action='store_true', help='Use adaptive mesh dataset (auto-detected from data)')
     
-    # Model architecture
-    parser.add_argument('--son_p_dim', type=int, default=128, help='Latent dimension p for SetONet')
-    parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
-    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
-    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
-    parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention", "sum"], help='Aggregation type for SetONet')
-    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
-    parser.add_argument(
-        '--son_branch_head_type',
-        type=str,
-        default="standard",
-        choices=["standard", "petrov_attention", "galerkin_pou", "quadrature", "adaptive_quadrature"],
-        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), galerkin_pou (Galerkin partition-of-unity), quadrature (additive quadrature over learned test functions), or adaptive_quadrature (input-adaptive quadrature).",
-    )
-    parser.add_argument('--son_pg_dk', type=int, default=None, help='PG attention key/query dim (default: son_phi_output_size)')
-    parser.add_argument('--son_pg_dv', type=int, default=None, help='PG attention value dim (default: son_phi_output_size)')
-    parser.add_argument(
-        '--son_pg_no_logw',
-        action='store_true',
-        help='Disable adding log(sensor_weights) to PG attention logits (weights are unused by default).',
-    )
-    parser.add_argument('--son_galerkin_dk', type=int, default=None, help='Galerkin PoU key/query dim (default: son_phi_output_size)')
-    parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
-    parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
-    parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
-    parser.add_argument(
-        '--son_galerkin_normalize',
-        type=str,
-        default="total",
-        choices=["none", "total", "token"],
-        help='Galerkin PoU normalization: "none" (no norm), "total" (divide by total weight), "token" (per-token mass norm).',
-    )
-    parser.add_argument(
-        '--son_galerkin_learn_temperature',
-        action='store_true',
-        help='Learn temperature parameter for Galerkin PoU softmax sharpness.',
-    )
-    parser.add_argument('--son_adapt_quad_rank', type=int, default=4, help='Adaptive quadrature low-rank update rank R')
-    parser.add_argument('--son_adapt_quad_hidden', type=int, default=64, help='Adaptive quadrature adapter MLP hidden dimension')
-    parser.add_argument('--son_adapt_quad_scale', type=float, default=0.1, help='Adaptive quadrature tanh-bounded update scale')
+    # Model architecture - VIDON specific
+    parser.add_argument('--vidon_p_dim', type=int, default=128, help='Number of trunk basis functions (excluding τ0)')
+    parser.add_argument('--vidon_n_heads', type=int, default=4, help='Number of attention heads (H)')
+    parser.add_argument('--vidon_d_enc', type=int, default=40, help='Encoding dimension (d_enc)')
+    parser.add_argument('--vidon_head_output_size', type=int, default=64, help='Output dimension of each head')
+    
+    # Encoder networks (Ψc, Ψv)
+    parser.add_argument('--vidon_enc_hidden', type=int, default=40, help='Hidden size for encoder networks')
+    parser.add_argument('--vidon_enc_n_layers', type=int, default=4, help='Number of layers in encoder networks')
+    
+    # Head MLPs (ωe, νe)
+    parser.add_argument('--vidon_head_hidden', type=int, default=128, help='Hidden size for head MLPs')
+    parser.add_argument('--vidon_head_n_layers', type=int, default=4, help='Number of layers in head MLPs')
+    
+    # Combiner Φ
+    parser.add_argument('--vidon_combine_hidden', type=int, default=256, help='Hidden size for combiner network')
+    parser.add_argument('--vidon_combine_n_layers', type=int, default=4, help='Number of layers in combiner network')
+    
+    # Trunk network τ
+    parser.add_argument('--vidon_trunk_hidden', type=int, default=256, help='Hidden size for trunk network')
+    parser.add_argument('--vidon_n_trunk_layers', type=int, default=4, help='Number of layers in trunk network')
+    
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for networks')
 
     # Training parameters
-    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
+    parser.add_argument('--vidon_lr', type=float, default=5e-4, help='Learning rate for VIDON')
+    parser.add_argument('--vidon_epochs', type=int, default=50000, help='Number of epochs for VIDON')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
-    parser.add_argument('--pos_encoding_max_freq', type=float, default=0.01, help='Max frequency for sinusoidal positional encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[15000, 30000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Model loading
-    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained VIDON model')
     
     # Random seed and device
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
@@ -105,7 +83,7 @@ def setup_logging(project_root, custom_log_dir=None):
         log_dir = custom_log_dir
     else:
         logs_base_in_project = os.path.join(project_root, "logs")
-        model_folder_name = "SetONet_concentration2d"
+        model_folder_name = "VIDON_concentration2d"
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
@@ -123,44 +101,30 @@ def get_activation_function(activation_name):
     return activation_map.get(activation_name.lower(), nn.ReLU)
 
 def create_model(args, device):
-    """Create SetONet model for 2D concentration problem."""
+    """Create VIDON model for 2D concentration problem."""
     activation_fn = get_activation_function(args.activation_fn)
     
-    model = SetONet(
+    model = VIDON(
         input_size_src=2,  # 2D coordinates (x, y) of sources
         output_size_src=1,  # Scalar emission rate values
         input_size_tgt=2,  # 2D coordinates (x, y) of grid points
         output_size_tgt=1,  # Scalar concentration values
-        p=args.son_p_dim,
-        phi_hidden_size=args.son_phi_hidden,
-        rho_hidden_size=args.son_rho_hidden,
-        trunk_hidden_size=args.son_trunk_hidden,
-        n_trunk_layers=args.son_n_trunk_layers,
+        p=args.vidon_p_dim,
+        n_heads=args.vidon_n_heads,
+        d_enc=args.vidon_d_enc,
+        head_output_size=args.vidon_head_output_size,
+        enc_hidden_size=args.vidon_enc_hidden,
+        enc_n_layers=args.vidon_enc_n_layers,
+        head_hidden_size=args.vidon_head_hidden,
+        head_n_layers=args.vidon_head_n_layers,
+        combine_hidden_size=args.vidon_combine_hidden,
+        combine_n_layers=args.vidon_combine_n_layers,
+        trunk_hidden_size=args.vidon_trunk_hidden,
+        n_trunk_layers=args.vidon_n_trunk_layers,
         activation_fn=activation_fn,
-        use_deeponet_bias=True,
-        phi_output_size=args.son_phi_output_size,
-        initial_lr=args.son_lr,
+        initial_lr=args.vidon_lr,
         lr_schedule_steps=args.lr_schedule_steps,
         lr_schedule_gammas=args.lr_schedule_gammas,
-        pos_encoding_type=args.pos_encoding_type,
-        pos_encoding_dim=args.pos_encoding_dim,
-        pos_encoding_max_freq=args.pos_encoding_max_freq,
-        aggregation_type=args.son_aggregation,
-        use_positional_encoding=(args.pos_encoding_type != 'skip'),
-        attention_n_tokens=1,
-        branch_head_type=args.son_branch_head_type,
-        pg_dk=args.son_pg_dk,
-        pg_dv=args.son_pg_dv,
-        pg_use_logw=(not args.son_pg_no_logw),
-        galerkin_dk=args.son_galerkin_dk,
-        galerkin_dv=args.son_galerkin_dv,
-        quad_dk=args.son_quad_dk,
-        quad_dv=args.son_quad_dv,
-        galerkin_normalize=args.son_galerkin_normalize,
-        galerkin_learn_temperature=args.son_galerkin_learn_temperature,
-        adapt_quad_rank=args.son_adapt_quad_rank,
-        adapt_quad_hidden=args.son_adapt_quad_hidden,
-        adapt_quad_scale=args.son_adapt_quad_scale,
     ).to(device)
 
     return model
@@ -219,6 +183,10 @@ def main():
     device = torch.device(args.device)
     print(f"Using device: {device}")
     
+    # Validate arguments
+    if len(args.lr_schedule_steps) != len(args.lr_schedule_gammas):
+        raise ValueError("--lr_schedule_steps and --lr_schedule_gammas must have the same number of elements.")
+    
     # Set random seed and ensure reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -244,17 +212,23 @@ def main():
         return
     
     # Create model
-    print("Creating SetONet model...")
+    print("Creating VIDON model...")
     model = create_model(args, device)
     
     # Print model info
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {total_params:,}")
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {total_params:,} (trainable: {trainable_params:,})")
     
     # Load pre-trained model if specified
+    model_was_loaded = False
     if args.load_model_path:
-        print(f"Loading pre-trained model from: {args.load_model_path}")
-        model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+        if os.path.exists(args.load_model_path):
+            print(f"Loading pre-trained model from: {args.load_model_path}")
+            model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            model_was_loaded = True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
     
     # Setup TensorBoard callback if enabled
     callback = None
@@ -275,14 +249,16 @@ def main():
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
     
     # Train model
-    print(f"\nStarting training for {args.son_epochs} epochs...")
-    
-    model.train_model(
-        dataset=concentration_dataset,
-        epochs=args.son_epochs,
-        progress_bar=True,
-        callback=callback
-    )
+    if not model_was_loaded:
+        print(f"\nStarting training for {args.vidon_epochs} epochs...")
+        model.train_model(
+            dataset=concentration_dataset,
+            epochs=args.vidon_epochs,
+            progress_bar=True,
+            callback=callback
+        )
+    else:
+        print(f"\nVIDON concentration 2D model loaded. Skipping training.")
     
     # Evaluate model
     print("\nEvaluating model...")
@@ -313,10 +289,13 @@ def main():
     save_experiment_configuration(args, model, dataset, concentration_dataset, device, log_dir, dataset_type="concentration_2d", test_results=test_results)
     
     # Save model
-    model_save_path = os.path.join(log_dir, "concentration2d_setonet_model.pth")
-    torch.save(model.state_dict(), model_save_path)
-    print(f"Model saved to: {model_save_path}")
+    if not model_was_loaded:
+        model_save_path = os.path.join(log_dir, "concentration2d_vidon_model.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved to: {model_save_path}")
+    
     print("Training completed!")
 
 if __name__ == "__main__":
     main()
+

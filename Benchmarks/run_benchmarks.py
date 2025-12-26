@@ -22,7 +22,7 @@ from typing import Any, Dict, List
 import yaml
 
 from benchmark_utils import (
-    DEEPONET_SCRIPTS, MODEL_VARIANTS, SETONET_SCRIPTS,
+    DEEPONET_SCRIPTS, MODEL_VARIANTS, SETONET_SCRIPTS, VIDON_SCRIPTS,
     Job, aggregate_results, generate_all_configs, generate_param_table,
     load_benchmark_config, run_jobs_parallel,
 )
@@ -60,7 +60,12 @@ def build_job_queue(config: Dict[str, Any], benchmarks_dir: Path) -> List[Job]:
     for model_name in config['models']:
         variant = MODEL_VARIANTS.get(model_name, {"base": model_name, "overrides": {}})
         base_model, variant_overrides = variant["base"], variant.get("overrides", {})
-        scripts = SETONET_SCRIPTS if base_model == "setonet" else DEEPONET_SCRIPTS
+        if base_model == "setonet":
+            scripts = SETONET_SCRIPTS
+        elif base_model == "vidon":
+            scripts = VIDON_SCRIPTS
+        else:
+            scripts = DEEPONET_SCRIPTS
 
         for benchmark in config['benchmarks']:
             if benchmark not in scripts:
@@ -87,9 +92,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", "-c", default="Benchmarks/benchmark_config.yaml", help="YAML config path")
     p.add_argument("--dry-run", "-n", action="store_true", help="Show jobs without executing")
     p.add_argument("--check-run", action="store_true", help="Quick test run with 10 epochs per job")
+    p.add_argument("--reaggregate", action="store_true", help="Re-aggregate results from existing logs only")
     p.add_argument("--seeds", help="Override seeds (comma-separated)")
     p.add_argument("--benchmarks", help="Override benchmarks (comma-separated)")
-    p.add_argument("--models", choices=["setonet", "deeponet", "both"], help="Filter models")
+    p.add_argument("--models", choices=["setonet", "deeponet", "vidon", "all"], help="Filter models by base type")
     p.add_argument("--devices", help="Override devices (comma-separated)")
     p.add_argument("--output-dir", "-o", help="Override output directory")
     return p.parse_args()
@@ -145,12 +151,22 @@ def main():
         config['devices'] = [d.strip() for d in args.devices.split(',')]
     if args.benchmarks:
         config['benchmarks'] = [b.strip() for b in args.benchmarks.split(',')]
-    if args.models and args.models != "both":
+    if args.models and args.models != "all":
         config['models'] = [m for m in config['models']
                            if MODEL_VARIANTS.get(m, {"base": m}).get("base") == args.models]
 
     logging.basicConfig(level=getattr(logging, config.get('log_level', 'INFO').upper()),
                        format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+    # Handle reaggregate-only mode
+    if args.reaggregate:
+        if args.output_dir:
+            logs_all_dir = Path(args.output_dir)
+            results_dir = logs_all_dir / "_results"
+        logging.info(f"Re-aggregating results from: {logs_all_dir}")
+        aggregate_results([], results_dir, logs_all_dir)
+        logging.info(f"Results saved to: {results_dir}")
+        return
 
     jobs = build_job_queue(config, script_dir)
     if not jobs:
@@ -163,6 +179,8 @@ def main():
         for job in jobs:
             if job.base_model == "setonet":
                 job.overrides["son_epochs"] = 10
+            elif job.base_model == "vidon":
+                job.overrides["vidon_epochs"] = 10
             else:
                 job.overrides["don_epochs"] = 10
 

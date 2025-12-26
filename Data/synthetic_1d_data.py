@@ -375,3 +375,52 @@ def load_synthetic_pretrained_deeponet_model(deeponet_model, args, device):
             args.load_model_path = None
     
     return False
+
+
+def create_synthetic_vidon_model(args, device):
+    """Create VIDON model for synthetic 1D benchmark."""
+    from Models.VIDON import VIDON
+    
+    print(f"\n--- Initializing VIDON Model for {args.benchmark} ---")
+    print(f"Using activation function: {args.activation_fn}")
+    
+    activation_fn = get_activation_function(args.activation_fn)
+    
+    model = VIDON(
+        input_size_src=1,  # 1D coordinates (x)
+        output_size_src=1,  # Scalar function values
+        input_size_tgt=1,  # 1D coordinates (x)
+        output_size_tgt=1,  # Scalar output values
+        p=args.vidon_p_dim,
+        n_heads=args.vidon_n_heads,
+        d_enc=args.vidon_d_enc,
+        head_output_size=args.vidon_head_output_size,
+        enc_hidden_size=args.vidon_enc_hidden,
+        enc_n_layers=args.vidon_enc_n_layers,
+        head_hidden_size=args.vidon_head_hidden,
+        head_n_layers=args.vidon_head_n_layers,
+        combine_hidden_size=args.vidon_combine_hidden,
+        combine_n_layers=args.vidon_combine_n_layers,
+        trunk_hidden_size=args.vidon_trunk_hidden,
+        n_trunk_layers=args.vidon_n_trunk_layers,
+        activation_fn=activation_fn,
+        initial_lr=args.vidon_lr,
+        lr_schedule_steps=args.lr_schedule_steps,
+        lr_schedule_gammas=args.lr_schedule_gammas,
+    ).to(device)
+    
+    return model
+
+
+def load_synthetic_pretrained_vidon_model(vidon_model, args, device):
+    """Load a pre-trained VIDON model if path is provided."""
+    if args.load_model_path:
+        if os.path.exists(args.load_model_path):
+            vidon_model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            print(f"Loaded pre-trained VIDON model from: {args.load_model_path}")
+            return True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
+            args.load_model_path = None
+    
+    return False

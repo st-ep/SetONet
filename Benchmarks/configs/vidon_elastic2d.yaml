@@ -1,0 +1,43 @@
+# VIDON configuration for Elastic 2D benchmark
+
+# Model architecture
+vidon_p_dim: 128
+vidon_n_heads: 4
+vidon_d_enc: 40
+vidon_head_output_size: 64
+
+# Encoder networks (Ψc, Ψv)
+vidon_enc_hidden: 40
+vidon_enc_n_layers: 4
+
+# Head MLPs (ωe, νe)
+vidon_head_hidden: 128
+vidon_head_n_layers: 4
+
+# Combiner Φ
+vidon_combine_hidden: 256
+vidon_combine_n_layers: 4
+
+# Trunk network τ
+vidon_trunk_hidden: 256
+vidon_n_trunk_layers: 4
+
+activation_fn: relu
+
+# Training
+vidon_lr: 0.0005
+vidon_epochs: 125000
+batch_size: 64
+lr_schedule_steps: [25000, 75000, 125000, 175000, 1250000, 1500000]
+lr_schedule_gammas: [0.2, 0.5, 0.2, 0.5, 0.2, 0.5]
+
+# Sensor dropout for training/evaluation
+train_sensor_dropoff: 0.0
+eval_sensor_dropoff: 0.0
+replace_with_nearest: false
+
+# TensorBoard
+enable_tensorboard: true
+tb_eval_frequency: 1000
+tb_test_samples: 100
+

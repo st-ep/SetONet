@@ -12,10 +12,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_pa
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from Models.SetONet import SetONet
+from Models.VIDON import VIDON
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
-from Models.utils.config_utils import save_experiment_configuration
+from Models.utils.config_utils_vidon import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.darcy_1d_data.darcy_1d_dataset import (
     load_darcy_dataset, DarcyDataGenerator, create_sensor_points, 
@@ -24,75 +24,54 @@ from Data.darcy_1d_data.darcy_1d_dataset import (
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train SetONet for Darcy 1D equation.")
+    parser = argparse.ArgumentParser(description="Train VIDON for Darcy 1D equation.")
     
     # Data parameters
     parser.add_argument('--data_path', type=str, default="Data/darcy_1d_data/darcy_1d_dataset_501", 
                        help='Path to Darcy 1D dataset')
     parser.add_argument('--sensor_size', type=int, default=300, help='Number of sensor locations (max 501 for Darcy 1D grid)')
     
-    # Model architecture
-    parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
-    parser.add_argument('--son_phi_hidden', type=int, default=256, help='Hidden size for SetONet phi network')
-    parser.add_argument('--son_rho_hidden', type=int, default=256, help='Hidden size for SetONet rho network')
-    parser.add_argument('--son_trunk_hidden', type=int, default=256, help='Hidden size for SetONet trunk network')
-    parser.add_argument('--son_n_trunk_layers', type=int, default=4, help='Number of layers in SetONet trunk network')
-    parser.add_argument('--son_phi_output_size', type=int, default=32, help='Output size of SetONet phi network before aggregation')
-    parser.add_argument('--son_aggregation', type=str, default="attention", choices=["mean", "attention", "sum"], help='Aggregation type for SetONet')
-    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for SetONet networks')
-    parser.add_argument(
-        '--son_branch_head_type',
-        type=str,
-        default="standard",
-        choices=["standard", "petrov_attention", "galerkin_pou", "quadrature", "adaptive_quadrature"],
-        help="Branch head type: standard (pool+rho), petrov_attention (Petrov-Galerkin attention), galerkin_pou (Galerkin partition-of-unity), quadrature (additive quadrature over learned test functions), or adaptive_quadrature (input-adaptive quadrature).",
-    )
-    parser.add_argument('--son_pg_dk', type=int, default=None, help='PG attention key/query dim (default: son_phi_output_size)')
-    parser.add_argument('--son_pg_dv', type=int, default=None, help='PG attention value dim (default: son_phi_output_size)')
-    parser.add_argument(
-        '--son_pg_no_logw',
-        action='store_true',
-        help='Disable adding log(sensor_weights) to PG attention logits (weights are unused by default).',
-    )
-    parser.add_argument('--son_galerkin_dk', type=int, default=None, help='Galerkin PoU key/query dim (default: son_phi_output_size)')
-    parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
-    parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
-    parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
-    parser.add_argument(
-        '--son_galerkin_normalize',
-        type=str,
-        default="total",
-        choices=["none", "total", "token"],
-        help='Galerkin PoU normalization: "none" (no norm), "total" (divide by total weight), "token" (per-token mass norm).',
-    )
-    parser.add_argument(
-        '--son_galerkin_learn_temperature',
-        action='store_true',
-        help='Learn temperature parameter for Galerkin PoU softmax sharpness.',
-    )
-    parser.add_argument('--son_adapt_quad_rank', type=int, default=4, help='Adaptive quadrature low-rank update rank R')
-    parser.add_argument('--son_adapt_quad_hidden', type=int, default=64, help='Adaptive quadrature adapter MLP hidden dimension')
-    parser.add_argument('--son_adapt_quad_scale', type=float, default=0.1, help='Adaptive quadrature tanh-bounded update scale')
-
+    # Model architecture - VIDON specific
+    parser.add_argument('--vidon_p_dim', type=int, default=32, help='Number of trunk basis functions (excluding τ0)')
+    parser.add_argument('--vidon_n_heads', type=int, default=4, help='Number of attention heads (H)')
+    parser.add_argument('--vidon_d_enc', type=int, default=40, help='Encoding dimension (d_enc)')
+    parser.add_argument('--vidon_head_output_size', type=int, default=64, help='Output dimension of each head')
+    
+    # Encoder networks (Ψc, Ψv)
+    parser.add_argument('--vidon_enc_hidden', type=int, default=40, help='Hidden size for encoder networks')
+    parser.add_argument('--vidon_enc_n_layers', type=int, default=4, help='Number of layers in encoder networks')
+    
+    # Head MLPs (ωe, νe)
+    parser.add_argument('--vidon_head_hidden', type=int, default=128, help='Hidden size for head MLPs')
+    parser.add_argument('--vidon_head_n_layers', type=int, default=4, help='Number of layers in head MLPs')
+    
+    # Combiner Φ
+    parser.add_argument('--vidon_combine_hidden', type=int, default=256, help='Hidden size for combiner network')
+    parser.add_argument('--vidon_combine_n_layers', type=int, default=4, help='Number of layers in combiner network')
+    
+    # Trunk network τ
+    parser.add_argument('--vidon_trunk_hidden', type=int, default=256, help='Hidden size for trunk network')
+    parser.add_argument('--vidon_n_trunk_layers', type=int, default=4, help='Number of layers in trunk network')
+    
+    parser.add_argument('--activation_fn', type=str, default="relu", choices=["relu", "tanh", "gelu", "swish"], help='Activation function for networks')
+    
     # Training parameters
-    parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
-    parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
+    parser.add_argument('--vidon_lr', type=float, default=5e-4, help='Learning rate for VIDON')
+    parser.add_argument('--vidon_epochs', type=int, default=125000, help='Number of epochs for VIDON')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
-    parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency for sinusoidal positional encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
     
     # Sensor dropout and evaluation
-    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation (0.0-1.0)')
-    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors')
+    # VIDON can handle variable input sizes like SetONet, so it uses removal/replacement (not interpolation)
+    parser.add_argument('--eval_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during evaluation (0.0-1.0). Sensors are removed or replaced.')
+    parser.add_argument('--replace_with_nearest', action='store_true', help='Replace dropped sensors with nearest remaining sensors instead of removing them')
     parser.add_argument('--train_sensor_dropoff', type=float, default=0.0, help='Sensor drop-off rate during training (0.0-1.0)')
     parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples for evaluation')
     parser.add_argument('--n_query_points', type=int, default=300, help='Number of query points for evaluation')
     
     # Model loading and misc
-    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
+    parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained VIDON model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
     parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
@@ -112,7 +91,7 @@ def setup_logging(custom_log_dir=None):
         log_dir = custom_log_dir
     else:
         logs_base_in_project = os.path.join("logs")
-        model_folder_name = "SetONet_darcy_1d"
+        model_folder_name = "VIDON_darcy_1d"
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_dir = os.path.join(logs_base_in_project, model_folder_name, timestamp)
     os.makedirs(log_dir, exist_ok=True)
@@ -129,58 +108,49 @@ def get_activation_function(activation_name):
     }
     return activation_map.get(activation_name.lower(), nn.ReLU)
 
-def create_setonet_model(args, device):
-    """Create SetONet model for Darcy 1D problem."""
-    print(f"\n--- Initializing SetONet Model for {args.benchmark} ---")
+def create_vidon_model(args, device):
+    """Create VIDON model for Darcy 1D problem."""
+    print(f"\n--- Initializing VIDON Model for Darcy 1D ---")
     print(f"Using activation function: {args.activation_fn}")
     
     activation_fn = get_activation_function(args.activation_fn)
     
-    model = SetONet(
+    model = VIDON(
         input_size_src=1,  # 1D coordinates (x)
         output_size_src=1,  # Scalar force values
         input_size_tgt=1,  # 1D coordinates (x)
         output_size_tgt=1,  # Scalar displacement values
-        p=args.son_p_dim,
-        phi_hidden_size=args.son_phi_hidden,
-        rho_hidden_size=args.son_rho_hidden,
-        trunk_hidden_size=args.son_trunk_hidden,
-        n_trunk_layers=args.son_n_trunk_layers,
+        p=args.vidon_p_dim,
+        n_heads=args.vidon_n_heads,
+        d_enc=args.vidon_d_enc,
+        head_output_size=args.vidon_head_output_size,
+        enc_hidden_size=args.vidon_enc_hidden,
+        enc_n_layers=args.vidon_enc_n_layers,
+        head_hidden_size=args.vidon_head_hidden,
+        head_n_layers=args.vidon_head_n_layers,
+        combine_hidden_size=args.vidon_combine_hidden,
+        combine_n_layers=args.vidon_combine_n_layers,
+        trunk_hidden_size=args.vidon_trunk_hidden,
+        n_trunk_layers=args.vidon_n_trunk_layers,
         activation_fn=activation_fn,
-        use_deeponet_bias=True,
-        phi_output_size=args.son_phi_output_size,
-        initial_lr=args.son_lr,
+        initial_lr=args.vidon_lr,
         lr_schedule_steps=args.lr_schedule_steps,
         lr_schedule_gammas=args.lr_schedule_gammas,
-        pos_encoding_type=args.pos_encoding_type,
-        pos_encoding_dim=args.pos_encoding_dim,
-        pos_encoding_max_freq=args.pos_encoding_max_freq,
-        aggregation_type=args.son_aggregation,
-        use_positional_encoding=(args.pos_encoding_type != 'skip'),
-        attention_n_tokens=1,
-        branch_head_type=args.son_branch_head_type,
-        pg_dk=args.son_pg_dk,
-        pg_dv=args.son_pg_dv,
-        pg_use_logw=(not args.son_pg_no_logw),
-        galerkin_dk=args.son_galerkin_dk,
-        galerkin_dv=args.son_galerkin_dv,
-        quad_dk=args.son_quad_dk,
-        quad_dv=args.son_quad_dv,
-        galerkin_normalize=args.son_galerkin_normalize,
-        galerkin_learn_temperature=args.son_galerkin_learn_temperature,
-        adapt_quad_rank=args.son_adapt_quad_rank,
-        adapt_quad_hidden=args.son_adapt_quad_hidden,
-        adapt_quad_scale=args.son_adapt_quad_scale,
     ).to(device)
-
+    
+    # Print model info
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {total_params:,} (trainable: {trainable_params:,})")
+    
     return model
 
-def load_pretrained_model(setonet_model, args, device):
+def load_pretrained_model(model, args, device):
     """Load a pre-trained model if path is provided."""
     if args.load_model_path:
         if os.path.exists(args.load_model_path):
-            setonet_model.load_state_dict(torch.load(args.load_model_path, map_location=device))
-            print(f"Loaded pre-trained SetONet model from: {args.load_model_path}")
+            model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            print(f"Loaded pre-trained VIDON model from: {args.load_model_path}")
             return True
         else:
             print(f"Warning: Model path not found: {args.load_model_path}")
@@ -189,14 +159,23 @@ def load_pretrained_model(setonet_model, args, device):
     return False
 
 
-
-
-
 def main():
     """Main training function."""
     args = parse_arguments()
     device = torch.device(args.device)
     print(f"Using device: {device}")
+    
+    # Validate arguments
+    if len(args.lr_schedule_steps) != len(args.lr_schedule_gammas):
+        raise ValueError("--lr_schedule_steps and --lr_schedule_gammas must have the same number of elements.")
+    
+    if not 0.0 <= args.eval_sensor_dropoff <= 1.0:
+        raise ValueError("--eval_sensor_dropoff must be between 0.0 and 1.0")
+    
+    if args.eval_sensor_dropoff > 0:
+        replacement_mode = "nearest neighbor replacement" if args.replace_with_nearest else "removal"
+        print(f"Will test robustness with sensor drop-off rate: {args.eval_sensor_dropoff:.1%} using {replacement_mode}")
+        print("(Training will use full sensor data)")
     
     # Add benchmark argument for compatibility
     args.benchmark = 'darcy_1d'
@@ -226,10 +205,10 @@ def main():
     print(f"Sensor points: {len(sensor_x)}, Query points: {len(query_x)}")
     
     # Create model
-    setonet_model = create_setonet_model(args, device)
+    vidon_model = create_vidon_model(args, device)
     
     # Load pre-trained model if specified
-    model_was_loaded = load_pretrained_model(setonet_model, args, device)
+    model_was_loaded = load_pretrained_model(vidon_model, args, device)
     
     # Create data generator
     data_generator = DarcyDataGenerator(dataset, sensor_indices, query_indices, device, params, grid_points)
@@ -252,23 +231,23 @@ def main():
     
     # Training
     if not model_was_loaded:
-        print(f"\nStarting training for {args.son_epochs} epochs...")
-        setonet_model.train_model(
+        print(f"\nStarting training for {args.vidon_epochs} epochs...")
+        vidon_model.train_model(
             dataset=data_generator,
-            epochs=args.son_epochs,
+            epochs=args.vidon_epochs,
             progress_bar=True,
             callback=callback
         )
     else:
-        print(f"\nSetONet Darcy 1D model loaded. Skipping training.")
+        print(f"\nVIDON Darcy 1D model loaded. Skipping training.")
     
     # Evaluate model
     print("\nEvaluating model...")
     from Data.data_utils import apply_sensor_dropoff
     
-    setonet_model.eval()
+    vidon_model.eval()
     test_data = dataset['test']
-    n_test = min(100, len(test_data))
+    n_test = min(args.n_test_samples_eval, len(test_data))
     total_loss = 0.0
     total_rel_error = 0.0
     
@@ -276,22 +255,26 @@ def main():
         for i in range(n_test):
             sample = test_data[i]
             
-            xs_data = torch.tensor(sample['u'], device=device)[sensor_indices].unsqueeze(0).unsqueeze(-1)
+            # Get sensor values at sensor indices
+            us_data = torch.tensor(sample['u'], device=device)[sensor_indices]
             ys_data = query_x.unsqueeze(0)
             target = torch.tensor(sample['s'], device=device)[query_indices].unsqueeze(0).unsqueeze(-1)
             
             # Apply sensor dropout if specified
+            # VIDON can handle variable input sizes, so we use removal/replacement like SetONet
             if args.eval_sensor_dropoff > 0.0:
-                xs_dropped, us_dropped = apply_sensor_dropoff(
-                    sensor_x, xs_data.squeeze(0).squeeze(-1), 
+                sensor_x_used, us_used = apply_sensor_dropoff(
+                    sensor_x, us_data, 
                     args.eval_sensor_dropoff, args.replace_with_nearest
                 )
-                xs_data = us_dropped.unsqueeze(0).unsqueeze(-1)
-                sensor_x_used = xs_dropped.unsqueeze(0)
+                # Reshape for model input: [B, S, 1]
+                xs_input = sensor_x_used.unsqueeze(0)  # [1, S_remaining, 1]
+                us_input = us_used.unsqueeze(0).unsqueeze(-1)  # [1, S_remaining, 1]
             else:
-                sensor_x_used = sensor_x.unsqueeze(0)
+                xs_input = sensor_x.unsqueeze(0)  # [1, S, 1]
+                us_input = us_data.unsqueeze(0).unsqueeze(-1)  # [1, S, 1]
             
-            pred = setonet_model(sensor_x_used, xs_data, ys_data)
+            pred = vidon_model(xs_input, us_input, ys_data)
             
             mse_loss = torch.nn.MSELoss()(pred, target)
             total_loss += mse_loss.item()
@@ -318,7 +301,7 @@ def main():
     for i in range(3):
         plot_save_path = os.path.join(log_dir, f"darcy_results_test_sample_{i}.png")
         plot_darcy_comparison(
-            model_to_use=setonet_model, dataset=dataset, sensor_x=sensor_x, query_x=query_x,
+            model_to_use=vidon_model, dataset=dataset, sensor_x=sensor_x, query_x=query_x,
             sensor_indices=sensor_indices, query_indices=query_indices, log_dir=log_dir,
             num_samples_to_plot=1, plot_filename_prefix=f"darcy_1d_test_{i}",
             sensor_dropoff=args.eval_sensor_dropoff, replace_with_nearest=args.replace_with_nearest,
@@ -328,14 +311,15 @@ def main():
     
     # Save model
     if not model_was_loaded:
-        model_save_path = os.path.join(log_dir, "darcy1d_setonet_model.pth")
-        torch.save(setonet_model.state_dict(), model_save_path)
-        print(f"Model saved to: {model_save_path}")
+        model_save_path = os.path.join(log_dir, "darcy1d_vidon_model.pth")
+        torch.save(vidon_model.state_dict(), model_save_path)
+        print(f"VIDON model saved to: {model_save_path}")
     
     # Save experiment configuration with test results
-    save_experiment_configuration(args, setonet_model, dataset, dataset_wrapper=data_generator, device=device, log_dir=log_dir, dataset_type="darcy_1d", test_results=test_results)
+    save_experiment_configuration(args, vidon_model, dataset, dataset_wrapper=data_generator, device=device, log_dir=log_dir, dataset_type="darcy_1d", test_results=test_results)
     
     print("Training completed!")
 
 if __name__ == "__main__":
-    main() 
+    main()
+
