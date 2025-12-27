@@ -185,7 +185,7 @@ def main():
         seed=args.seed,
     )
 
-    dataset_path = "Data/transport_data/transport_dataset_2000_200"
+    dataset_path = "Data/transport_data/transport_dataset"
 
     # Calculate total samples needed
     total_samples = args.train + args.test

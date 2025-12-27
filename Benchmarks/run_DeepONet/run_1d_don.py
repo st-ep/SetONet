@@ -51,7 +51,7 @@ def parse_arguments():
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained DeepONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
+    parser.add_argument('--device', type=str, default='cuda:1', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
