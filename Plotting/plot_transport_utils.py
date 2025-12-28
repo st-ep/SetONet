@@ -12,6 +12,103 @@ from pathlib import Path
 import matplotlib.colors as colors
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+def plot_transport_map_results(model, dataset, transport_dataset, device, sample_idx=0,
+                               save_path=None, dataset_split="test", n_arrows=None):
+    """
+    Plot transport map results at source points (what the model is trained on).
+
+    Shows:
+      1) Predicted transport map (source -> predicted targets)
+      2) Ground truth transport map (source -> true targets)
+      3) Error magnitude at source points
+    """
+    model.eval()
+
+    data_split = dataset[dataset_split]
+    if sample_idx >= len(data_split):
+        sample_idx = 0
+
+    sample = data_split[sample_idx]
+
+    source_points = torch.tensor(np.array(sample['source_points']), device=device, dtype=torch.float32)
+    target_points = torch.tensor(np.array(sample['target_points']), device=device, dtype=torch.float32)
+
+    source_coords = source_points.unsqueeze(0)  # (1, n_sources, 2)
+    source_weights = torch.ones(1, source_points.shape[0], 1, device=device, dtype=torch.float32)
+
+    with torch.no_grad():
+        pred_transport = model(source_coords, source_weights, source_coords)  # (1, n_sources, 2)
+
+    pred_targets = source_points + pred_transport.squeeze(0)
+
+    source_np = source_points.cpu().numpy()
+    target_np = target_points.cpu().numpy()
+    pred_target_np = pred_targets.cpu().numpy()
+
+    error_vec = pred_target_np - target_np
+    error_mag = np.linalg.norm(error_vec, axis=1)
+
+    n_points = source_np.shape[0]
+    indices = np.arange(n_points) if n_arrows is None else np.linspace(0, n_points - 1, n_arrows, dtype=int)
+
+    domain_size = float(sample.get("domain_size", 5.0))
+    padding = 0.2
+    xlim = (-domain_size - padding, domain_size + padding)
+    ylim = (-domain_size - padding, domain_size + padding)
+
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+    # Plot 1: Predicted transport map
+    ax1 = axes[0]
+    ax1.scatter(source_np[:, 0], source_np[:, 1], c='blue', s=18, alpha=0.7, label='Source')
+    ax1.scatter(pred_target_np[:, 0], pred_target_np[:, 1], c='red', s=18, alpha=0.7, label='Predicted target')
+    for i in indices:
+        ax1.plot([source_np[i, 0], pred_target_np[i, 0]],
+                 [source_np[i, 1], pred_target_np[i, 1]],
+                 ':', color='gray', alpha=0.5, linewidth=0.8)
+    ax1.set_title('Predicted Transport Map')
+    ax1.set_xlim(xlim)
+    ax1.set_ylim(ylim)
+    ax1.set_aspect('equal')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=10)
+
+    # Plot 2: Ground truth transport map
+    ax2 = axes[1]
+    ax2.scatter(source_np[:, 0], source_np[:, 1], c='blue', s=18, alpha=0.7, label='Source')
+    ax2.scatter(target_np[:, 0], target_np[:, 1], c='green', s=18, alpha=0.7, label='True target')
+    for i in indices:
+        ax2.plot([source_np[i, 0], target_np[i, 0]],
+                 [source_np[i, 1], target_np[i, 1]],
+                 ':', color='gray', alpha=0.5, linewidth=0.8)
+    ax2.set_title('Ground Truth Transport Map')
+    ax2.set_xlim(xlim)
+    ax2.set_ylim(ylim)
+    ax2.set_aspect('equal')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=10)
+
+    # Plot 3: Error magnitude at source points
+    ax3 = axes[2]
+    sc = ax3.scatter(source_np[:, 0], source_np[:, 1], c=error_mag, cmap='magma', s=22, alpha=0.85)
+    ax3.set_title('Transport Map Error |pred - true|')
+    ax3.set_xlim(xlim)
+    ax3.set_ylim(ylim)
+    ax3.set_aspect('equal')
+    ax3.grid(True, alpha=0.3)
+    divider = make_axes_locatable(ax3)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(sc, cax=cax, label='Error magnitude')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved transport map plot to {save_path}")
+
+    model.train()
+    return fig
+
 def plot_transport_results(model, dataset, transport_dataset, device, sample_idx=0, 
                           save_path=None, dataset_split="test"):
     """
@@ -38,7 +135,10 @@ def plot_transport_results(model, dataset, transport_dataset, device, sample_idx
     # Extract ground truth data
     source_points = torch.tensor(np.array(sample['source_points']), device=device, dtype=torch.float32)
     velocity_field_gt = torch.tensor(np.array(sample['velocity_field']), device=device, dtype=torch.float32)
-    grid_coords = torch.tensor(np.array(sample['grid_coords']), device=device, dtype=torch.float32)
+    if transport_dataset is not None:
+        grid_coords = transport_dataset.grid_pts.to(device)
+    else:
+        grid_coords = torch.tensor(np.array(sample['grid_coords']), device=device, dtype=torch.float32)
     
     # Prepare input for model
     source_coords = source_points.unsqueeze(0)  # (1, n_sources, 2)
@@ -174,7 +274,10 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     source_points = torch.tensor(np.array(sample['source_points']), device=device, dtype=torch.float32)
     target_points = torch.tensor(np.array(sample['target_points']), device=device, dtype=torch.float32)
     velocity_field_gt = torch.tensor(np.array(sample['velocity_field']), device=device, dtype=torch.float32)
-    grid_coords = torch.tensor(np.array(sample['grid_coords']), device=device, dtype=torch.float32)
+    if transport_dataset is not None:
+        grid_coords = transport_dataset.grid_pts.to(device)
+    else:
+        grid_coords = torch.tensor(np.array(sample['grid_coords']), device=device, dtype=torch.float32)
     
     # Prepare input for model - velocity field prediction
     source_coords = source_points.unsqueeze(0)  # (1, n_sources, 2)
@@ -310,5 +413,3 @@ def plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, s
     
     model.train()
     return fig
-
-

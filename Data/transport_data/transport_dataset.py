@@ -10,6 +10,18 @@ import torch
 from pathlib import Path
 from datasets import load_from_disk
 
+def _compute_grid_coords(sample):
+    if "grid_coords" in sample:
+        return np.array(sample["grid_coords"], dtype=np.float32)
+
+    domain_size = float(sample.get("domain_size", 5.0))
+    velocity_field = np.array(sample["velocity_field"])
+    grid_h, grid_w = velocity_field.shape[0], velocity_field.shape[1]
+    xs = np.linspace(-domain_size, domain_size, grid_h, dtype=np.float32)
+    ys = np.linspace(-domain_size, domain_size, grid_w, dtype=np.float32)
+    xx, yy = np.meshgrid(xs, ys, indexing='ij')
+    return np.stack([xx.ravel(), yy.ravel()], axis=-1).astype(np.float32)
+
 class TransportDataset:
     """Dataset wrapper for optimal transport data."""
     
@@ -45,8 +57,8 @@ class TransportDataset:
         self.velocity_fields = []
         
         # Get grid information from first sample
-        grid_coords = np.array(sample_0['grid_coords'])
         velocity_field = np.array(sample_0['velocity_field'])
+        grid_coords = _compute_grid_coords(sample_0)
         
         self.grid_h, self.grid_w = velocity_field.shape[0], velocity_field.shape[1]
         self.n_grid_points = self.grid_h * self.grid_w

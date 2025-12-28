@@ -12,6 +12,18 @@ import matplotlib.colors as colors
 from datasets import load_from_disk
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+def _compute_grid_coords(sample):
+    if "grid_coords" in sample:
+        return np.array(sample["grid_coords"], dtype=np.float32)
+
+    domain_size = float(sample.get("domain_size", 5.0))
+    velocity_field = np.array(sample["velocity_field"])
+    grid_h, grid_w = velocity_field.shape[0], velocity_field.shape[1]
+    xs = np.linspace(-domain_size, domain_size, grid_h, dtype=np.float32)
+    ys = np.linspace(-domain_size, domain_size, grid_w, dtype=np.float32)
+    xx, yy = np.meshgrid(xs, ys, indexing='ij')
+    return np.stack([xx.ravel(), yy.ravel()], axis=-1).astype(np.float32)
+
 def load_transport_dataset(dataset_path: str = "Data/transport_data/transport_dataset"):
     """Load the transport dataset from disk and extract parameters."""
     try:
@@ -27,7 +39,7 @@ def load_transport_dataset(dataset_path: str = "Data/transport_data/transport_da
         source_points = np.array(sample_0['source_points'])
         target_points = np.array(sample_0['target_points'])
         velocity_field = np.array(sample_0['velocity_field'])
-        grid_coords = np.array(sample_0['grid_coords'])
+        grid_coords = _compute_grid_coords(sample_0)
         
         print(f"  - Source points per sample: {len(source_points)}")
         print(f"  - Target points per sample: {len(target_points)}")
@@ -47,7 +59,7 @@ def plot_single_sample(dataset, sample_idx=0, split='train', save_path=None):
     X = np.array(sample['source_points'])  # source points (256, 2)
     Y = np.array(sample['target_points'])  # target points (256, 2)
     V = np.array(sample['velocity_field'])  # velocity field (80, 80, 2)
-    grid_pts = np.array(sample['grid_coords'])  # grid coordinates (6400, 2)
+    grid_pts = _compute_grid_coords(sample)  # grid coordinates (n_grid_points, 2)
     
     # Reshape grid for plotting
     grid_size = V.shape[0]  # Get actual grid size from velocity field
@@ -199,7 +211,7 @@ def plot_transport_statistics(dataset, save_path=None):
     
     V_mean = np.mean(V_all, axis=0)  # Average over all samples
     sample_0 = train_data[0]
-    grid_pts = np.array(sample_0['grid_coords'])
+    grid_pts = _compute_grid_coords(sample_0)
     grid_size = V_mean.shape[0]
     xx = grid_pts[:, 0].reshape(grid_size, grid_size)
     yy = grid_pts[:, 1].reshape(grid_size, grid_size)

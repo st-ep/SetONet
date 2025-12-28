@@ -381,7 +381,14 @@ def apply_sensor_dropoff_with_2d_interpolation(sensor_coords, sensor_values, gri
 
 def generate_batch(batch_size, n_trunk_points, sensor_x, scale, input_range, device, constant_zero=True, variable_sensors=False, sensor_size=None):
     """
-    Generates a batch of polynomial functions and their derivatives.
+    Generates a batch of polynomial + sinusoidal functions and their derivatives.
+    
+    Each sample is: f(x) = a*x³ + b*x² + c*x + d + e*sin(x)
+    
+    The sinusoidal term adds periodic non-polynomial behavior:
+    f'(x) = polynomial' + e*cos(x)
+    
+    This is a benchmark that tests models' ability to learn periodic patterns.
     
     Args:
         batch_size: Number of samples in the batch
@@ -421,12 +428,16 @@ def generate_batch(batch_size, n_trunk_points, sensor_x, scale, input_range, dev
     else:
         d = (torch.rand(batch_size, device=device) * 2 - 1) * scale
     
-    # Vectorized evaluation at sensor points (much faster!)
+    # Generate sinusoidal coefficient
+    e = (torch.rand(batch_size, device=device) * 2 - 1) * scale
+    
+    # Vectorized evaluation at sensor points
     # sensor_x_to_use: [sensor_size, 1]
-    # a, b, c, d: [batch_size]
+    # a, b, c, d, e: [batch_size]
     # Result: [batch_size, sensor_size]
     sensor_x_expanded = sensor_x_to_use.T  # [1, sensor_size]
     
+    # Polynomial terms
     f_at_sensors = (a.unsqueeze(1) * sensor_x_expanded**3 + 
                    b.unsqueeze(1) * sensor_x_expanded**2 + 
                    c.unsqueeze(1) * sensor_x_expanded + 
@@ -436,9 +447,32 @@ def generate_batch(batch_size, n_trunk_points, sensor_x, scale, input_range, dev
                          2 * b.unsqueeze(1) * sensor_x_expanded + 
                          c.unsqueeze(1))  # [batch_size, sensor_size]
     
-    # Vectorized evaluation at trunk points (same as before)
-    f_at_trunk = a.unsqueeze(1) * x_eval.T**3 + b.unsqueeze(1) * x_eval.T**2 + c.unsqueeze(1) * x_eval.T + d.unsqueeze(1)
-    f_prime_at_trunk = 3 * a.unsqueeze(1) * x_eval.T**2 + 2 * b.unsqueeze(1) * x_eval.T + c.unsqueeze(1)
+    # Add sinusoidal term: e * sin(x)
+    sin_at_sensors = torch.sin(sensor_x_expanded)  # [1, sensor_size]
+    f_at_sensors = f_at_sensors + e.unsqueeze(1) * sin_at_sensors
+    
+    # Derivative: d/dx[e * sin(x)] = e * cos(x)
+    cos_at_sensors = torch.cos(sensor_x_expanded)  # [1, sensor_size]
+    f_prime_at_sensors = f_prime_at_sensors + e.unsqueeze(1) * cos_at_sensors
+    
+    # Vectorized evaluation at trunk points
+    trunk_x_expanded = x_eval.T  # [1, n_trunk_points]
+    
+    f_at_trunk = (a.unsqueeze(1) * trunk_x_expanded**3 + 
+                  b.unsqueeze(1) * trunk_x_expanded**2 + 
+                  c.unsqueeze(1) * trunk_x_expanded + 
+                  d.unsqueeze(1))
+    f_prime_at_trunk = (3 * a.unsqueeze(1) * trunk_x_expanded**2 + 
+                        2 * b.unsqueeze(1) * trunk_x_expanded + 
+                        c.unsqueeze(1))
+    
+    # Add sinusoidal term at trunk points
+    sin_at_trunk = torch.sin(trunk_x_expanded)  # [1, n_trunk_points]
+    f_at_trunk = f_at_trunk + e.unsqueeze(1) * sin_at_trunk
+    
+    # Derivative: d/dx[e * sin(x)] = e * cos(x)
+    cos_at_trunk = torch.cos(trunk_x_expanded)  # [1, n_trunk_points]
+    f_prime_at_trunk = f_prime_at_trunk + e.unsqueeze(1) * cos_at_trunk
     
     f_at_trunk = f_at_trunk.T  # [n_trunk_points, batch_size]
     f_prime_at_trunk = f_prime_at_trunk.T  # [n_trunk_points, batch_size]

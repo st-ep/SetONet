@@ -31,13 +31,13 @@ devices: ["cuda:0", "cuda:1"]
 # -----------------------------------------------------------------------------
 models:
  # - deeponet
- # - vidon
- # - setonet_attention
- # - setonet_sum
- # - setonet_mean
- # - setonet_petrov
- # - setonet_galerkin
-  - setonet_quadrature
+  - vidon
+  - setonet_attention
+  - setonet_sum
+  - setonet_mean
+  - setonet_petrov
+  - setonet_galerkin
+ # - setonet_quadrature
   - setonet_adaptive
 
 # -----------------------------------------------------------------------------
@@ -68,15 +68,15 @@ benchmarks:
 #  - darcy_1d
 #  - darcy_1d_robust_train
 #  - darcy_1d_robust_eval
-  - burgers_1d
-  - burgers_1d_robust_train
-  - burgers_1d_robust_eval
-#  - 1d_integral
-#  - 1d_derivative
-#  - 1d_integral_varsens
-#  - 1d_integral_robust
-#  - 1d_derivative_varsens
-#  - 1d_derivative_robust
+#  - burgers_1d
+#  - burgers_1d_robust_train
+#  - burgers_1d_robust_eval
+  - 1d_integral
+  - 1d_derivative
+  - 1d_integral_varsens
+  - 1d_integral_robust
+  - 1d_derivative_varsens
+  - 1d_derivative_robust
 #  - concentration_2d
 #  - transport
 

@@ -318,12 +318,18 @@ class TensorBoardCallback:
                         # Transport dataset format
                         source_points = torch.tensor(np.array(sample['source_points']), device=self.device, dtype=torch.float32)
                         velocity_field = torch.tensor(np.array(sample['velocity_field']), device=self.device, dtype=torch.float32)
-                        grid_coords = torch.tensor(np.array(sample['grid_coords']), device=self.device, dtype=torch.float32)
+                        grid_coords = self._get_transport_grid_coords(sample)
                         
                         xs = source_points.unsqueeze(0)  # (1, n_sources, 2)
                         us = torch.ones(1, source_points.shape[0], 1, device=self.device, dtype=torch.float32)  # (1, n_sources, 1)
-                        ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
-                        target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
+                        mode = getattr(self.dataset_wrapper, 'mode', 'velocity_field')
+                        if mode == 'transport_map':
+                            target_points = torch.tensor(np.array(sample['target_points']), device=self.device, dtype=torch.float32)
+                            ys = source_points.unsqueeze(0)  # (1, n_sources, 2)
+                            target = (target_points - source_points).unsqueeze(0)  # (1, n_sources, 2)
+                        else:
+                            ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+                            target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
                     else:
                         raise ValueError(f"Unknown dataset format with 'sources' key. Available keys: {list(sample.keys())}")
                     
@@ -331,12 +337,18 @@ class TensorBoardCallback:
                     # Transport dataset format (alternative structure)
                     source_points = torch.tensor(np.array(sample['source_points']), device=self.device, dtype=torch.float32)
                     velocity_field = torch.tensor(np.array(sample['velocity_field']), device=self.device, dtype=torch.float32)
-                    grid_coords = torch.tensor(np.array(sample['grid_coords']), device=self.device, dtype=torch.float32)
+                    grid_coords = self._get_transport_grid_coords(sample)
                     
                     xs = source_points.unsqueeze(0)  # (1, n_sources, 2)
                     us = torch.ones(1, source_points.shape[0], 1, device=self.device, dtype=torch.float32)  # (1, n_sources, 1)
-                    ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
-                    target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
+                    mode = getattr(self.dataset_wrapper, 'mode', 'velocity_field')
+                    if mode == 'transport_map':
+                        target_points = torch.tensor(np.array(sample['target_points']), device=self.device, dtype=torch.float32)
+                        ys = source_points.unsqueeze(0)  # (1, n_sources, 2)
+                        target = (target_points - source_points).unsqueeze(0)  # (1, n_sources, 2)
+                    else:
+                        ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+                        target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
                     
                 elif 'X' in sample and 'u' in sample and 'Y' in sample and 's' in sample:
                     # Elastic dataset format (original code)
@@ -385,3 +397,18 @@ class TensorBoardCallback:
         
         model.train()
         return total_mse_loss / n_test, total_rel_error / n_test 
+
+    def _get_transport_grid_coords(self, sample):
+        if hasattr(self.dataset_wrapper, "grid_pts"):
+            return self.dataset_wrapper.grid_pts.to(self.device)
+        if "grid_coords" in sample:
+            return torch.tensor(np.array(sample["grid_coords"]), device=self.device, dtype=torch.float32)
+
+        velocity_field = np.array(sample["velocity_field"])
+        grid_h, grid_w = velocity_field.shape[0], velocity_field.shape[1]
+        domain_size = float(sample.get("domain_size", 5.0))
+        xs = np.linspace(-domain_size, domain_size, grid_h, dtype=np.float32)
+        ys = np.linspace(-domain_size, domain_size, grid_w, dtype=np.float32)
+        xx, yy = np.meshgrid(xs, ys, indexing='ij')
+        grid_coords = np.stack([xx.ravel(), yy.ravel()], axis=-1)
+        return torch.tensor(grid_coords, device=self.device, dtype=torch.float32)

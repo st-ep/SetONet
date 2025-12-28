@@ -18,7 +18,7 @@ from Models.utils.helper_utils import calculate_l2_relative_error
 from Models.utils.config_utils import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.transport_data.transport_dataset import load_transport_dataset
-from Plotting.plot_transport_utils import plot_transport_results, plot_transport_vectors_and_maps
+from Plotting.plot_transport_utils import plot_transport_map_results
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -28,7 +28,7 @@ def parse_arguments():
     default_data_path = os.path.join(project_root, "Data", "transport_data", "transport_dataset")
     parser.add_argument('--data_path', type=str, default=default_data_path, 
                        help='Path to transport dataset')
-    parser.add_argument('--mode', type=str, default='velocity_field', 
+    parser.add_argument('--mode', type=str, default='transport_map', 
                        choices=['velocity_field', 'transport_map', 'density_transport'],
                        help='Transport learning mode')
     
@@ -169,78 +169,87 @@ def create_model(args, device):
     return model
 
 def evaluate_model(model, dataset, transport_dataset, device, n_test_samples=100):
-    """Evaluate the model on test data."""
+    """
+    Evaluate the model on test data with two metrics:
+    - Transport map error at source points (primary, meaningful metric)
+    - Grid velocity field error (paper comparability metric)
+    """
     model.eval()
     test_data = dataset['test']
     n_test = min(n_test_samples, len(test_data))
 
-    total_loss = 0.0
-    total_rel_error = 0.0
-    total_cv_error_x = 0.0
-    total_cv_error_y = 0.0
-    total_cv_error_magnitude = 0.0
+    # Metric A: Transport map at source points (primary)
+    total_mse_transport = 0.0
+    total_rel_l2_transport = 0.0
+    
+    # Metric B: Velocity field on grid (paper comparability)
+    total_mse_velocity = 0.0
+    total_rel_l2_velocity = 0.0
     
     with torch.no_grad():
         for i in range(n_test):
             sample = test_data[i]
             
-            # Prepare test data
+            # Load test data
             source_points = torch.tensor(np.array(sample['source_points']), device=device, dtype=torch.float32)
+            target_points = torch.tensor(np.array(sample['target_points']), device=device, dtype=torch.float32)
             velocity_field = torch.tensor(np.array(sample['velocity_field']), device=device, dtype=torch.float32)
-            grid_coords = torch.tensor(np.array(sample['grid_coords']), device=device, dtype=torch.float32)
+            grid_coords = transport_dataset.grid_pts.to(device)
             
-            # Add batch dimension
+            # Compute ground truth transport vectors (displacement)
+            transport_vectors_gt = target_points - source_points  # (n_sources, 2)
+            
+            # Add batch dimension for model input
             source_coords = source_points.unsqueeze(0)  # (1, n_sources, 2)
-            source_weights = torch.ones(1, source_points.shape[0], 1, device=device, dtype=torch.float32)  # (1, n_sources, 1)
-            target_coords = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+            source_weights = torch.ones(1, source_points.shape[0], 1, device=device, dtype=torch.float32)
+            
+            # ===== Metric A: Transport map at source points =====
+            # Query model at source points to get displacement prediction
+            pred_transport = model(source_coords, source_weights, source_coords)  # (1, n_sources, 2)
+            target_transport = transport_vectors_gt.unsqueeze(0)  # (1, n_sources, 2)
+            
+            mse_transport = torch.nn.MSELoss()(pred_transport, target_transport)
+            total_mse_transport += mse_transport.item()
+            
+            rel_l2_transport = calculate_l2_relative_error(
+                pred_transport.reshape(1, -1), 
+                target_transport.reshape(1, -1)
+            )
+            total_rel_l2_transport += rel_l2_transport.item()
+            
+            # ===== Metric B: Velocity field on grid =====
+            # Query model at grid points to get velocity field prediction
+            grid_coords_batch = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
+            pred_velocity = model(source_coords, source_weights, grid_coords_batch)  # (1, n_grid_points, 2)
             target_velocity = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
             
-            # Forward pass
-            pred = model(source_coords, source_weights, target_coords)
+            mse_velocity = torch.nn.MSELoss()(pred_velocity, target_velocity)
+            total_mse_velocity += mse_velocity.item()
             
-            # Calculate metrics
-            mse_loss = torch.nn.MSELoss()(pred, target_velocity)
-            total_loss += mse_loss.item()
-            
-            rel_error = calculate_l2_relative_error(pred.reshape(pred.shape[0], -1), target_velocity.reshape(target_velocity.shape[0], -1))
-            total_rel_error += rel_error.item()
-
-            # Calculate Coefficient of Variation (CV) errors
-            # Use source points standard deviation for normalization
-            source_std_x = source_points[:, 0].std().item()
-            source_std_y = source_points[:, 1].std().item()
-
-            # Mean velocity fields
-            pred_mean_x = pred[0, :, 0].mean().item()
-            pred_mean_y = pred[0, :, 1].mean().item()
-            gt_mean_x = target_velocity[0, :, 0].mean().item()
-            gt_mean_y = target_velocity[0, :, 1].mean().item()
-
-            # CV error for x and y components
-            cv_error_x = abs(pred_mean_x - gt_mean_x) / (source_std_x + 1e-8)  # Add small epsilon to avoid division by zero
-            cv_error_y = abs(pred_mean_y - gt_mean_y) / (source_std_y + 1e-8)
-
-            # CV error for magnitude
-            pred_mean_mag = np.sqrt(pred_mean_x**2 + pred_mean_y**2)
-            gt_mean_mag = np.sqrt(gt_mean_x**2 + gt_mean_y**2)
-            source_std_mag = np.sqrt(source_std_x**2 + source_std_y**2)
-            cv_error_magnitude = abs(pred_mean_mag - gt_mean_mag) / (source_std_mag + 1e-8)
-
-            total_cv_error_x += cv_error_x
-            total_cv_error_y += cv_error_y
-            total_cv_error_magnitude += cv_error_magnitude
+            rel_l2_velocity = calculate_l2_relative_error(
+                pred_velocity.reshape(1, -1), 
+                target_velocity.reshape(1, -1)
+            )
+            total_rel_l2_velocity += rel_l2_velocity.item()
     
-    avg_loss = total_loss / n_test
-    avg_rel_error = total_rel_error / n_test
-    avg_cv_error_x = total_cv_error_x / n_test
-    avg_cv_error_y = total_cv_error_y / n_test
-    avg_cv_error_magnitude = total_cv_error_magnitude / n_test
+    # Compute averages
+    avg_mse_transport = total_mse_transport / n_test
+    avg_rel_l2_transport = total_rel_l2_transport / n_test
+    avg_mse_velocity = total_mse_velocity / n_test
+    avg_rel_l2_velocity = total_rel_l2_velocity / n_test
 
-    print(f"Test Results - MSE Loss: {avg_loss:.6e}, Relative Error: {avg_rel_error:.6f}")
-    print(f"CV Errors - X: {avg_cv_error_x:.6f}, Y: {avg_cv_error_y:.6f}, Magnitude: {avg_cv_error_magnitude:.6f}")
+    print(f"\nTest Results ({n_test} samples):")
+    print(f"  Transport Map (primary):   MSE={avg_mse_transport:.6e}, Rel L2={avg_rel_l2_transport:.6f}")
+    print(f"  Velocity Field (paper):    MSE={avg_mse_velocity:.6e}, Rel L2={avg_rel_l2_velocity:.6f}")
 
     model.train()
-    return avg_loss, avg_rel_error, avg_cv_error_x, avg_cv_error_y, avg_cv_error_magnitude
+    return {
+        "mse_transport_map": avg_mse_transport,
+        "rel_l2_transport_map": avg_rel_l2_transport,
+        "mse_velocity_field": avg_mse_velocity,
+        "rel_l2_velocity_field": avg_rel_l2_velocity,
+        "n_test_samples": n_test,
+    }
 
 def main():
     """Main training function."""
@@ -317,45 +326,26 @@ def main():
     
     # Evaluate model
     print("\nEvaluating model...")
-    avg_loss, avg_rel_error, avg_cv_error_x, avg_cv_error_y, avg_cv_error_magnitude = evaluate_model(
-        model, dataset, transport_dataset, device, n_test_samples=100)
-
-    # Prepare test results for configuration saving
-    test_results = {
-        "relative_l2_error": avg_rel_error,
-        "mse_loss": avg_loss,
-        "cv_error_x": avg_cv_error_x,
-        "cv_error_y": avg_cv_error_y,
-        "cv_error_magnitude": avg_cv_error_magnitude,
-        "n_test_samples": 100
-    }
+    test_results = evaluate_model(model, dataset, transport_dataset, device, n_test_samples=100)
+    
+    # Add primary metric as "relative_l2_error" for compatibility with benchmark aggregation
+    test_results["relative_l2_error"] = test_results["rel_l2_transport_map"]
+    test_results["mse_loss"] = test_results["mse_transport_map"]
     
     # Generate plots
     print("Generating plots...")
     
-    # Plot 3 test samples
+    # Plot transport map results for 3 test samples
     for i in range(3):
-        plot_save_path = os.path.join(log_dir, f"transport_results_test_sample_{i+1}.png")
-        plot_transport_results(model, dataset, transport_dataset, device, sample_idx=i, 
-                             save_path=plot_save_path, dataset_split="test")
+        plot_save_path = os.path.join(log_dir, f"transport_map_test_sample_{i+1}.png")
+        plot_transport_map_results(model, dataset, transport_dataset, device, sample_idx=i,
+                                   save_path=plot_save_path, dataset_split="test")
     
-    # Plot 3 train samples  
+    # Plot transport map results for 3 train samples  
     for i in range(3):
-        plot_save_path = os.path.join(log_dir, f"transport_results_train_sample_{i+1}.png")
-        plot_transport_results(model, dataset, transport_dataset, device, sample_idx=i, 
-                             save_path=plot_save_path, dataset_split="train")
-    
-    # Plot transport vectors and maps for 3 test samples
-    for i in range(3):
-        plot_save_path = os.path.join(log_dir, f"transport_vectors_maps_test_sample_{i+1}.png")
-        plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, sample_idx=i, 
-                                       save_path=plot_save_path, dataset_split="test")
-    
-    # Plot transport vectors and maps for 3 train samples  
-    for i in range(3):
-        plot_save_path = os.path.join(log_dir, f"transport_vectors_maps_train_sample_{i+1}.png")
-        plot_transport_vectors_and_maps(model, dataset, transport_dataset, device, sample_idx=i, 
-                                       save_path=plot_save_path, dataset_split="train")
+        plot_save_path = os.path.join(log_dir, f"transport_map_train_sample_{i+1}.png")
+        plot_transport_map_results(model, dataset, transport_dataset, device, sample_idx=i,
+                                   save_path=plot_save_path, dataset_split="train")
     
     # Save experiment configuration with test results
     save_experiment_configuration(args, model, dataset, transport_dataset, device, log_dir, dataset_type="transport", test_results=test_results)
