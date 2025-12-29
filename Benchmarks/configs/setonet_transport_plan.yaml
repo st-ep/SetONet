@@ -1,0 +1,45 @@
+# SetONet configuration for transport-plan benchmark
+
+# Data / objective
+mode: plan
+marginal_penalty_weight: 1.0
+eval_sinkhorn_iters: 0
+eval_sinkhorn_eps: 1.0e-9
+
+# Model architecture
+son_p_dim: 128
+son_phi_hidden: 256
+son_rho_hidden: 256
+son_trunk_hidden: 256
+son_n_trunk_layers: 4
+son_phi_output_size: 32
+activation_fn: relu
+
+# Aggregation (overridden by model variant)
+son_aggregation: attention
+son_branch_head_type: standard
+
+# Branch head options (for advanced variants)
+son_pg_no_logw: false
+son_galerkin_normalize: total
+son_galerkin_learn_temperature: false
+son_adapt_quad_rank: 4
+son_adapt_quad_hidden: 64
+son_adapt_quad_scale: 0.1
+
+# Positional encoding
+pos_encoding_type: sinusoidal
+pos_encoding_dim: 64
+pos_encoding_max_freq: 0.01
+
+# Training
+son_lr: 0.0005
+son_epochs: 50000
+batch_size: 32
+lr_schedule_steps: [15000, 30000, 125000, 175000, 1250000, 1500000]
+lr_schedule_gammas: [0.2, 0.5, 0.2, 0.5, 0.2, 0.5]
+
+# TensorBoard
+enable_tensorboard: true
+tb_eval_frequency: 1000
+tb_test_samples: 1000

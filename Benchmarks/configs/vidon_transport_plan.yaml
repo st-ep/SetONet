@@ -1,0 +1,43 @@
+# VIDON configuration for transport-plan benchmark
+
+# Data / objective
+mode: plan
+marginal_penalty_weight: 1.0
+eval_sinkhorn_iters: 0
+eval_sinkhorn_eps: 1.0e-9
+
+# Model architecture
+vidon_p_dim: 128
+vidon_n_heads: 4
+vidon_d_enc: 40
+vidon_head_output_size: 64
+
+# Encoder networks (Psi_c, Psi_v)
+vidon_enc_hidden: 40
+vidon_enc_n_layers: 4
+
+# Head MLPs (omega_e, nu_e)
+vidon_head_hidden: 128
+vidon_head_n_layers: 4
+
+# Combiner Phi
+vidon_combine_hidden: 256
+vidon_combine_n_layers: 4
+
+# Trunk network tau
+vidon_trunk_hidden: 256
+vidon_n_trunk_layers: 4
+
+activation_fn: relu
+
+# Training
+vidon_lr: 0.0005
+vidon_epochs: 50000
+batch_size: 32
+lr_schedule_steps: [15000, 30000, 125000, 175000, 1250000, 1500000]
+lr_schedule_gammas: [0.2, 0.5, 0.2, 0.5, 0.2, 0.5]
+
+# TensorBoard
+enable_tensorboard: true
+tb_eval_frequency: 1000
+tb_test_samples: 1000

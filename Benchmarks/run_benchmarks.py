@@ -80,6 +80,8 @@ def build_job_queue(config: Dict[str, Any], benchmarks_dir: Path) -> List[Job]:
                     overrides.update(user_overrides[benchmark])
                 if f"{model_name}_{benchmark}" in user_overrides:
                     overrides.update(user_overrides[f"{model_name}_{benchmark}"])
+                if benchmark == "transport_plan":
+                    overrides.setdefault("tb_test_samples", 1000)
 
                 jobs.append(Job(model_name, benchmark, seed, devices[device_idx % len(devices)], overrides))
                 device_idx += 1

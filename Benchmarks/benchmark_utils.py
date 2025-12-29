@@ -2,6 +2,7 @@
 import csv
 import json
 import logging
+import math
 import subprocess
 import sys
 import time
@@ -18,7 +19,7 @@ import yaml
 # Script mappings
 SETONET_SCRIPTS = {
     "heat_2d_P30": "run_heat_2d.py", "heat_2d_P10": "run_heat_2d.py",
-    "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py",
+    "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py", "transport_plan": "run_transport_plan.py",
     "elastic_2d": "run_elastic_2d.py", "elastic_2d_robust_train": "run_elastic_2d.py", "elastic_2d_robust_eval": "run_elastic_2d.py",
     "darcy_1d": "run_darcy_1d.py", "darcy_1d_robust_train": "run_darcy_1d.py", "darcy_1d_robust_eval": "run_darcy_1d.py",
     "burgers_1d": "run_burgers_1d.py", "burgers_1d_robust_train": "run_burgers_1d.py", "burgers_1d_robust_eval": "run_burgers_1d.py",
@@ -34,7 +35,7 @@ DEEPONET_SCRIPTS = {
 }
 VIDON_SCRIPTS = {
     "heat_2d_P30": "run_heat_2d_vidon.py", "heat_2d_P10": "run_heat_2d_vidon.py",
-    "concentration_2d": "run_consantration_2d_vidon.py", "transport": "run_transoprt_vidon.py",
+    "concentration_2d": "run_consantration_2d_vidon.py", "transport": "run_transoprt_vidon.py", "transport_plan": "run_transport_plan_vidon.py",
     "elastic_2d": "run_elastic_2d_vidon.py", "elastic_2d_robust_train": "run_elastic_2d_vidon.py", "elastic_2d_robust_eval": "run_elastic_2d_vidon.py",
     "darcy_1d": "run_darcy_1d_vidon.py", "darcy_1d_robust_train": "run_darcy_1d_vidon.py", "darcy_1d_robust_eval": "run_darcy_1d_vidon.py",
     "burgers_1d": "run_burgers_1d_vidon.py", "burgers_1d_robust_train": "run_burgers_1d_vidon.py", "burgers_1d_robust_eval": "run_burgers_1d_vidon.py",
@@ -50,7 +51,7 @@ BENCHMARK_CONFIG_MAP = {
         "darcy_1d": "setonet_1d.yaml", "darcy_1d_robust_train": "setonet_1d.yaml", "darcy_1d_robust_eval": "setonet_1d.yaml",
         "burgers_1d": "setonet_1d.yaml", "burgers_1d_robust_train": "setonet_1d.yaml", "burgers_1d_robust_eval": "setonet_1d.yaml",
         "heat_2d_P30": "setonet_heat2d.yaml", "heat_2d_P10": "setonet_heat2d.yaml",
-        "concentration_2d": "setonet_heat2d.yaml", "transport": "setonet_heat2d.yaml",
+        "concentration_2d": "setonet_heat2d.yaml", "transport": "setonet_heat2d.yaml", "transport_plan": "setonet_transport_plan.yaml",
         "elastic_2d": "setonet_elastic2d.yaml", "elastic_2d_robust_train": "setonet_elastic2d.yaml", "elastic_2d_robust_eval": "setonet_elastic2d.yaml",
     },
     "deeponet": {
@@ -66,7 +67,7 @@ BENCHMARK_CONFIG_MAP = {
         "darcy_1d": "vidon_1d.yaml", "darcy_1d_robust_train": "vidon_1d.yaml", "darcy_1d_robust_eval": "vidon_1d.yaml",
         "burgers_1d": "vidon_1d.yaml", "burgers_1d_robust_train": "vidon_1d.yaml", "burgers_1d_robust_eval": "vidon_1d.yaml",
         "heat_2d_P30": "vidon_heat2d.yaml", "heat_2d_P10": "vidon_heat2d.yaml",
-        "concentration_2d": "vidon_heat2d.yaml", "transport": "vidon_heat2d.yaml",
+        "concentration_2d": "vidon_heat2d.yaml", "transport": "vidon_heat2d.yaml", "transport_plan": "vidon_transport_plan.yaml",
         "elastic_2d": "vidon_elastic2d.yaml", "elastic_2d_robust_train": "vidon_elastic2d.yaml", "elastic_2d_robust_eval": "vidon_elastic2d.yaml",
     },
 }
@@ -108,6 +109,7 @@ BENCHMARK_DIMS = {
     "darcy_1d": (1, 1, 1, 1), "darcy_1d_robust_train": (1, 1, 1, 1), "darcy_1d_robust_eval": (1, 1, 1, 1),
     "burgers_1d": (1, 1, 1, 1), "burgers_1d_robust_train": (1, 1, 1, 1), "burgers_1d_robust_eval": (1, 1, 1, 1),
     "heat_2d_P30": (2, 1, 2, 1), "heat_2d_P10": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "transport": (2, 1, 2, 2),
+    "transport_plan": (2, 1, 2, 256),
     "elastic_2d": (2, 1, 2, 1), "elastic_2d_robust_train": (2, 1, 2, 1), "elastic_2d_robust_eval": (2, 1, 2, 1),
 }
 
@@ -252,17 +254,29 @@ def extract_metrics_from_log_dir(log_dir: Path) -> Dict[str, float]:
             data = json.load(f)
         # Check evaluation_results first (DeepONet/SetONet format)
         eval_results = data.get("evaluation_results", {})
-        if "test_relative_l2_error" in eval_results:
+        if "test_relative_l2_error" in eval_results and eval_results["test_relative_l2_error"] is not None:
             metrics["rel_l2_error"] = eval_results["test_relative_l2_error"]
-        if "test_mse_loss" in eval_results:
+        if "test_mse_loss" in eval_results and eval_results["test_mse_loss"] is not None:
             metrics["mse_loss"] = eval_results["test_mse_loss"]
+        tp_metrics = eval_results.get("transport_plan_metrics")
         # Fallback to test_results format if eval_results empty
         if not metrics:
             test_results = data.get("test_results", {})
-            if "relative_l2_error" in test_results:
+            if "relative_l2_error" in test_results and test_results["relative_l2_error"] is not None:
                 metrics["rel_l2_error"] = test_results["relative_l2_error"]
-            if "mse_loss" in test_results:
+            if "mse_loss" in test_results and test_results["mse_loss"] is not None:
                 metrics["mse_loss"] = test_results["mse_loss"]
+            if tp_metrics is None:
+                tp_metrics = test_results.get("transport_plan_metrics")
+        if tp_metrics:
+            if "rel_cost_gap" in tp_metrics:
+                metrics["tp_rel_cost_gap"] = tp_metrics["rel_cost_gap"]
+            if "marg_l1_rel" in tp_metrics:
+                metrics["tp_marg_l1_rel"] = tp_metrics["marg_l1_rel"]
+            if "marg_linf_rel" in tp_metrics:
+                metrics["tp_marg_linf_rel"] = tp_metrics["marg_linf_rel"]
+            if "kl_logN" in tp_metrics:
+                metrics["tp_kl_logN"] = tp_metrics["kl_logN"]
     except (json.JSONDecodeError, KeyError):
         pass
     return metrics
@@ -398,6 +412,7 @@ def _generate_pivot_tables_from_metrics(grouped: Dict[Tuple[str, str], List[Dict
     # Collect all models and benchmarks
     models = sorted(set(m for m, _ in grouped.keys()))
     benchmarks = sorted(set(b for _, b in grouped.keys()))
+    l2_mse_benchmarks = [b for b in benchmarks if b != "transport_plan"]
     
     # Build data matrices
     mse_data, l2_data = {}, {}
@@ -413,12 +428,69 @@ def _generate_pivot_tables_from_metrics(grouped: Dict[Tuple[str, str], List[Dict
             mse_data[(model, bench)] = (mse_mean, mse_std)
     
     # Write CSV pivot tables
-    _write_pivot_csv(output_dir / "results_l2.csv", models, benchmarks, l2_data, "{:.6f}")
-    _write_pivot_csv(output_dir / "results_mse.csv", models, benchmarks, mse_data, "{:.2e}")
+    _write_pivot_csv(output_dir / "results_l2.csv", models, l2_mse_benchmarks, l2_data, "{:.6f}")
+    _write_pivot_csv(output_dir / "results_mse.csv", models, l2_mse_benchmarks, mse_data, "{:.2e}")
     
     # Write LaTeX tables
-    _write_pivot_latex(output_dir / "results_l2.tex", models, benchmarks, l2_data, "{:.6f}", "Relative L2 Error")
-    _write_pivot_latex(output_dir / "results_mse.tex", models, benchmarks, mse_data, "{:.2e}", "MSE Loss")
+    _write_pivot_latex(output_dir / "results_l2.tex", models, l2_mse_benchmarks, l2_data, "{:.6f}", "Relative L2 Error")
+    _write_pivot_latex(output_dir / "results_mse.tex", models, l2_mse_benchmarks, mse_data, "{:.2e}", "MSE Loss")
+
+    _write_transport_plan_tables(output_dir, grouped)
+
+
+def _write_transport_plan_tables(output_dir: Path, grouped: Dict[Tuple[str, str], List[Dict[str, float]]]) -> None:
+    """Write transport-plan summary tables (combined metrics)."""
+    bench = "transport_plan"
+    rows = {model: metrics for (model, b), metrics in grouped.items() if b == bench}
+    if not rows:
+        return
+
+    headers = ["model", "RelCostGap", "ColMargL1/N", "ColMargLinf", "KL/logN"]
+    fmt = "{:.6e}"
+
+    def _mean_std(vals: List[float]) -> Tuple[float, float]:
+        if not vals:
+            return float("nan"), float("nan")
+        if len(vals) == 1:
+            return vals[0], 0.0
+        return mean(vals), stdev(vals)
+
+    def _format(vals: List[float]) -> str:
+        m, s = _mean_std(vals)
+        if math.isnan(m):
+            return "N/A"
+        return f"{fmt.format(m)} ± {fmt.format(s)}"
+
+    with open(output_dir / "results_transport_plan.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(headers)
+        for model in sorted(rows.keys()):
+            metrics_list = rows[model]
+            row = [
+                model,
+                _format([m["tp_rel_cost_gap"] for m in metrics_list if m.get("tp_rel_cost_gap") is not None]),
+                _format([m["tp_marg_l1_rel"] for m in metrics_list if m.get("tp_marg_l1_rel") is not None]),
+                _format([m["tp_marg_linf_rel"] for m in metrics_list if m.get("tp_marg_linf_rel") is not None]),
+                _format([m["tp_kl_logN"] for m in metrics_list if m.get("tp_kl_logN") is not None]),
+            ]
+            w.writerow(row)
+
+    with open(output_dir / "results_transport_plan.tex", "w") as f:
+        f.write("\\begin{table}[htbp]\n\\centering\n")
+        f.write("\\caption{Transport Plan Metrics}\n")
+        f.write("\\begin{tabular}{lcccc}\n\\toprule\n")
+        f.write("Model & RelCostGap & ColMargL1/N & ColMargLinf & KL/logN \\\\\n\\midrule\n")
+        for model in sorted(rows.keys()):
+            metrics_list = rows[model]
+            row = [
+                model.replace("_", "\\_"),
+                _format([m["tp_rel_cost_gap"] for m in metrics_list if m.get("tp_rel_cost_gap") is not None]),
+                _format([m["tp_marg_l1_rel"] for m in metrics_list if m.get("tp_marg_l1_rel") is not None]),
+                _format([m["tp_marg_linf_rel"] for m in metrics_list if m.get("tp_marg_linf_rel") is not None]),
+                _format([m["tp_kl_logN"] for m in metrics_list if m.get("tp_kl_logN") is not None]),
+            ]
+            f.write(" & ".join(row) + " \\\\\n")
+        f.write("\\bottomrule\n\\end{tabular}\n\\end{table}\n")
 
 
 def _write_pivot_csv(path: Path, models: List[str], benchmarks: List[str], 

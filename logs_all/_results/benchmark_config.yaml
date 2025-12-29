@@ -37,7 +37,7 @@ models:
   - setonet_mean
   - setonet_petrov
   - setonet_galerkin
- # - setonet_quadrature
+  - setonet_quadrature
   - setonet_adaptive
 
 # -----------------------------------------------------------------------------
@@ -71,14 +71,15 @@ benchmarks:
 #  - burgers_1d
 #  - burgers_1d_robust_train
 #  - burgers_1d_robust_eval
-  - 1d_integral
-  - 1d_derivative
-  - 1d_integral_varsens
-  - 1d_integral_robust
-  - 1d_derivative_varsens
-  - 1d_derivative_robust
+#  - 1d_integral
+#  - 1d_derivative
+#  - 1d_integral_varsens
+#  - 1d_integral_robust
+#  - 1d_derivative_varsens
+#  - 1d_derivative_robust
 #  - concentration_2d
 #  - transport
+  - transport_plan
 
 # -----------------------------------------------------------------------------
 # Optional parameter overrides

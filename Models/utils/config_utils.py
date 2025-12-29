@@ -98,6 +98,8 @@ def save_experiment_configuration(args, model, dataset, dataset_wrapper, device,
                 "n_test_samples_evaluated": test_results.get("n_test_samples", "unknown")
             }
         }
+        if "transport_plan_metrics" in test_results:
+            config["evaluation_results"]["transport_plan_metrics"] = test_results["transport_plan_metrics"]
     
     # Save configuration to JSON file
     config_path = os.path.join(log_dir, "experiment_config.json")
