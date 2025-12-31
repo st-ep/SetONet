@@ -319,14 +319,22 @@ class TensorBoardCallback:
                         source_points = torch.tensor(np.array(sample['source_points']), device=self.device, dtype=torch.float32)
                         velocity_field = torch.tensor(np.array(sample['velocity_field']), device=self.device, dtype=torch.float32)
                         grid_coords = self._get_transport_grid_coords(sample)
-                        
+
                         xs = source_points.unsqueeze(0)  # (1, n_sources, 2)
                         us = torch.ones(1, source_points.shape[0], 1, device=self.device, dtype=torch.float32)  # (1, n_sources, 1)
                         mode = getattr(self.dataset_wrapper, 'mode', 'velocity_field')
                         if mode == 'transport_map':
-                            target_points = torch.tensor(np.array(sample['target_points']), device=self.device, dtype=torch.float32)
-                            ys = source_points.unsqueeze(0)  # (1, n_sources, 2)
-                            target = (target_points - source_points).unsqueeze(0)  # (1, n_sources, 2)
+                            # Check for decoupled queries (Strategy 1)
+                            if 'query_points' in sample and 'query_vectors' in sample:
+                                query_points = torch.tensor(np.array(sample['query_points']), device=self.device, dtype=torch.float32)
+                                query_vectors = torch.tensor(np.array(sample['query_vectors']), device=self.device, dtype=torch.float32)
+                                ys = query_points.unsqueeze(0)  # (1, n_queries, 2)
+                                target = query_vectors.unsqueeze(0)  # (1, n_queries, 2)
+                            else:
+                                # Legacy: ys = xs
+                                target_points = torch.tensor(np.array(sample['target_points']), device=self.device, dtype=torch.float32)
+                                ys = source_points.unsqueeze(0)  # (1, n_sources, 2)
+                                target = (target_points - source_points).unsqueeze(0)  # (1, n_sources, 2)
                         else:
                             ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
                             target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)
@@ -343,9 +351,17 @@ class TensorBoardCallback:
                     us = torch.ones(1, source_points.shape[0], 1, device=self.device, dtype=torch.float32)  # (1, n_sources, 1)
                     mode = getattr(self.dataset_wrapper, 'mode', 'velocity_field')
                     if mode == 'transport_map':
-                        target_points = torch.tensor(np.array(sample['target_points']), device=self.device, dtype=torch.float32)
-                        ys = source_points.unsqueeze(0)  # (1, n_sources, 2)
-                        target = (target_points - source_points).unsqueeze(0)  # (1, n_sources, 2)
+                        # Check for decoupled queries (Strategy 1)
+                        if 'query_points' in sample and 'query_vectors' in sample:
+                            query_points = torch.tensor(np.array(sample['query_points']), device=self.device, dtype=torch.float32)
+                            query_vectors = torch.tensor(np.array(sample['query_vectors']), device=self.device, dtype=torch.float32)
+                            ys = query_points.unsqueeze(0)  # (1, n_queries, 2)
+                            target = query_vectors.unsqueeze(0)  # (1, n_queries, 2)
+                        else:
+                            # Legacy: ys = xs
+                            target_points = torch.tensor(np.array(sample['target_points']), device=self.device, dtype=torch.float32)
+                            ys = source_points.unsqueeze(0)  # (1, n_sources, 2)
+                            target = (target_points - source_points).unsqueeze(0)  # (1, n_sources, 2)
                     else:
                         ys = grid_coords.unsqueeze(0)  # (1, n_grid_points, 2)
                         target = velocity_field.reshape(1, -1, 2)  # (1, n_grid_points, 2)

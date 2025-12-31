@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +18,7 @@ import yaml
 # Script mappings
 SETONET_SCRIPTS = {
     "heat_2d_P30": "run_heat_2d.py", "heat_2d_P10": "run_heat_2d.py",
-    "concentration_2d": "run_consantration_2d.py", "transport": "run_transoprt.py",
+    "concentration_2d": "run_consantration_2d.py", "transport": "run_transport.py",
     "elastic_2d": "run_elastic_2d.py", "elastic_2d_robust_train": "run_elastic_2d.py", "elastic_2d_robust_eval": "run_elastic_2d.py",
     "darcy_1d": "run_darcy_1d.py", "darcy_1d_robust_train": "run_darcy_1d.py", "darcy_1d_robust_eval": "run_darcy_1d.py",
     "burgers_1d": "run_burgers_1d.py", "burgers_1d_robust_train": "run_burgers_1d.py", "burgers_1d_robust_eval": "run_burgers_1d.py",
@@ -34,7 +34,7 @@ DEEPONET_SCRIPTS = {
 }
 VIDON_SCRIPTS = {
     "heat_2d_P30": "run_heat_2d_vidon.py", "heat_2d_P10": "run_heat_2d_vidon.py",
-    "concentration_2d": "run_consantration_2d_vidon.py", "transport": "run_transoprt_vidon.py",
+    "concentration_2d": "run_consantration_2d_vidon.py", "transport": "run_transport_vidon.py",
     "elastic_2d": "run_elastic_2d_vidon.py", "elastic_2d_robust_train": "run_elastic_2d_vidon.py", "elastic_2d_robust_eval": "run_elastic_2d_vidon.py",
     "darcy_1d": "run_darcy_1d_vidon.py", "darcy_1d_robust_train": "run_darcy_1d_vidon.py", "darcy_1d_robust_eval": "run_darcy_1d_vidon.py",
     "burgers_1d": "run_burgers_1d_vidon.py", "burgers_1d_robust_train": "run_burgers_1d_vidon.py", "burgers_1d_robust_eval": "run_burgers_1d_vidon.py",
@@ -76,28 +76,37 @@ BENCHMARK_CONFIG_MAP = {
 MODEL_VARIANTS = {
     "deeponet": {"base": "deeponet", "overrides": {}},
     "vidon": {"base": "vidon", "overrides": {}},
-    "setonet_sum": {"base": "setonet", "overrides": {"son_aggregation": "sum"}},
-    "setonet_mean": {"base": "setonet", "overrides": {"son_aggregation": "mean"}},
-    "setonet_attention": {"base": "setonet", "overrides": {}},
+    "setonet_sum": {"base": "setonet", "overrides": {"son_aggregation": "sum"},
+        "benchmark_overrides": {
+            ("transport",): {"pos_encoding_max_freq": 0.1},
+        }},
+    "setonet_mean": {"base": "setonet", "overrides": {"son_aggregation": "mean"},
+        "benchmark_overrides": {
+            ("transport",): {"pos_encoding_max_freq": 0.1},
+        }},
+    "setonet_attention": {"base": "setonet", "overrides": {},
+        "benchmark_overrides": {
+            ("transport",): {"pos_encoding_max_freq": 0.1},
+        }},
     "setonet_petrov": {"base": "setonet", "overrides": {"son_branch_head_type": "petrov_attention"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
-            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+            ("transport",): {"pos_encoding_max_freq": 0.1},
         }},
     "setonet_galerkin": {"base": "setonet", "overrides": {"son_branch_head_type": "galerkin_pou"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
-            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+            ("transport",): {"pos_encoding_max_freq": 0.1},
         }},
     "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
-            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 210},
+            ("transport",): {"pos_encoding_max_freq": 0.1},
         }},
     "setonet_adaptive": {"base": "setonet", "overrides": {"son_branch_head_type": "adaptive_quadrature"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 185},
-            ("heat_2d_", "concentration_2d", "transport"): {"son_rho_hidden": 175},
+            ("transport",): {"pos_encoding_max_freq": 0.1},
         }},
 }
 
@@ -303,31 +312,57 @@ def scan_all_results(logs_all_dir: Path) -> Dict[Tuple[str, str, int], Dict[str,
 
 def run_jobs_parallel(jobs: List[Job], config: Dict[str, Any], benchmarks_dir: Path,
                       project_root: Path, logs_all_dir: Path) -> List[JobResult]:
-    """Run jobs in parallel across GPUs."""
+    """Run jobs in parallel across GPUs with strict FIFO ordering."""
     devices = config['devices']
     continue_on_failure = config.get('continue_on_failure', True)
+    max_workers = len(devices)
     results = []
 
-    logging.info(f"Running {len(jobs)} jobs across {len(devices)} GPU(s)")
-    with ProcessPoolExecutor(max_workers=len(devices)) as executor:
-        futures = {executor.submit(run_single_job, job, benchmarks_dir, project_root, logs_all_dir): job
-                   for job in jobs}
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                results.append(result)
-                if not result.success and not continue_on_failure:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-            except Exception as e:
-                logging.error(f"Job {futures[future].job_id} exception: {e}")
-                results.append(JobResult(futures[future], False, error_message=str(e)))
+    logging.info(f"Running {len(jobs)} jobs across {max_workers} GPU(s)")
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Track pending futures and their jobs
+        pending_futures = {}
+        job_queue = list(jobs)
+        next_job_idx = 0
+
+        # Submit initial batch (up to max_workers)
+        while next_job_idx < len(job_queue) and len(pending_futures) < max_workers:
+            job = job_queue[next_job_idx]
+            future = executor.submit(run_single_job, job, benchmarks_dir, project_root, logs_all_dir)
+            pending_futures[future] = job
+            next_job_idx += 1
+
+        # Process completions and submit new jobs in FIFO order
+        while pending_futures:
+            # Wait for any job to complete
+            done, _ = wait(pending_futures.keys(), return_when=FIRST_COMPLETED)
+
+            for future in done:
+                job = pending_futures.pop(future)
+                try:
+                    result = future.result()
+                    results.append(result)
+                    if not result.success and not continue_on_failure:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return results
+                except Exception as e:
+                    logging.error(f"Job {job.job_id} exception: {e}")
+                    results.append(JobResult(job, False, error_message=str(e)))
+
+                # Submit next job in queue if available
+                if next_job_idx < len(job_queue):
+                    next_job = job_queue[next_job_idx]
+                    next_future = executor.submit(run_single_job, next_job, benchmarks_dir, project_root, logs_all_dir)
+                    pending_futures[next_future] = next_job
+                    next_job_idx += 1
+
     return results
 
 
 def aggregate_results(results: List[JobResult], output_dir: Path, logs_all_dir: Path = None) -> None:
     """Aggregate results and save to CSV and JSON.
-    
+
     If logs_all_dir is provided, scans all existing results and merges with current run.
     Current run results take precedence over historical results.
     """
@@ -372,8 +407,8 @@ def aggregate_results(results: List[JobResult], output_dir: Path, logs_all_dir: 
         w = csv.DictWriter(f, ["model", "benchmark", "n_seeds", "rel_l2_mean", "rel_l2_std", "mse_mean", "mse_std"])
         w.writeheader()
         for (model, bench), metrics_list in sorted(grouped.items()):
-            l2 = [m["rel_l2_error"] for m in metrics_list if "rel_l2_error" in m]
-            mse = [m["mse_loss"] for m in metrics_list if "mse_loss" in m]
+            l2 = [m["rel_l2_error"] for m in metrics_list if m.get("rel_l2_error") is not None]
+            mse = [m["mse_loss"] for m in metrics_list if m.get("mse_loss") is not None]
             w.writerow({"model": model, "benchmark": bench, "n_seeds": len(metrics_list),
                        "rel_l2_mean": f"{mean(l2):.6f}" if l2 else "",
                        "rel_l2_std": f"{stdev(l2):.6f}" if len(l2) > 1 else "0.0",
@@ -398,24 +433,24 @@ def _generate_pivot_tables_from_metrics(grouped: Dict[Tuple[str, str], List[Dict
     # Collect all models and benchmarks
     models = sorted(set(m for m, _ in grouped.keys()))
     benchmarks = sorted(set(b for _, b in grouped.keys()))
-    
+
     # Build data matrices
     mse_data, l2_data = {}, {}
     for (model, bench), metrics_list in grouped.items():
-        l2_vals = [m["rel_l2_error"] for m in metrics_list if "rel_l2_error" in m]
-        mse_vals = [m["mse_loss"] for m in metrics_list if "mse_loss" in m]
-        
+        l2_vals = [m["rel_l2_error"] for m in metrics_list if m.get("rel_l2_error") is not None]
+        mse_vals = [m["mse_loss"] for m in metrics_list if m.get("mse_loss") is not None]
+
         if l2_vals:
             l2_mean, l2_std = mean(l2_vals), stdev(l2_vals) if len(l2_vals) > 1 else 0.0
             l2_data[(model, bench)] = (l2_mean, l2_std)
         if mse_vals:
             mse_mean, mse_std = mean(mse_vals), stdev(mse_vals) if len(mse_vals) > 1 else 0.0
             mse_data[(model, bench)] = (mse_mean, mse_std)
-    
+
     # Write CSV pivot tables
     _write_pivot_csv(output_dir / "results_l2.csv", models, benchmarks, l2_data, "{:.6f}")
     _write_pivot_csv(output_dir / "results_mse.csv", models, benchmarks, mse_data, "{:.2e}")
-    
+
     # Write LaTeX tables
     _write_pivot_latex(output_dir / "results_l2.tex", models, benchmarks, l2_data, "{:.6f}", "Relative L2 Error")
     _write_pivot_latex(output_dir / "results_mse.tex", models, benchmarks, mse_data, "{:.2e}", "MSE Loss")

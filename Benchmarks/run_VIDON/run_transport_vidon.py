@@ -1,0 +1,390 @@
+#!/usr/bin/env python
+"""run_transport_vidon.py
+----------------------------------
+Train VIDON for optimal transport with decoupled query points.
+
+This script trains VIDON to predict transport map displacement at query points
+that are independent from the source sensor locations.
+
+Dataset: Data/transport_q_data/transport_dataset
+Mode: 'transport_map' (decoupled queries)
+"""
+import argparse
+import os
+import sys
+from datetime import datetime
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+# Add the project root directory to sys.path
+current_script_path = os.path.abspath(__file__)
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from Data.transport_q_data.transport_dataset import load_transport_dataset
+from Models.VIDON import VIDON
+from Models.utils.config_utils_vidon import save_experiment_configuration
+from Models.utils.tensorboard_callback import TensorBoardCallback
+from Plotting.plot_transport_q_utils import plot_transport_q_overlay
+
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Train VIDON for optimal transport with decoupled queries (Strategy 1).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # Data parameters
+    default_data_path = os.path.join(project_root, "Data", "transport_q_data", "transport_dataset")
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default=default_data_path,
+        help="Path to transport-Q dataset",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="transport_map",
+        choices=["velocity_field", "transport_map", "transport_map_at_source", "density_transport"],
+        help="Transport learning mode (transport_map uses decoupled queries)",
+    )
+
+    # Model architecture - VIDON specific
+    parser.add_argument("--vidon_p_dim", type=int, default=128, help="Number of trunk basis functions (excluding tau0)")
+    parser.add_argument("--vidon_n_heads", type=int, default=4, help="Number of attention heads (H)")
+    parser.add_argument("--vidon_d_enc", type=int, default=40, help="Encoding dimension (d_enc)")
+    parser.add_argument("--vidon_head_output_size", type=int, default=64, help="Output dimension of each head")
+
+    # Encoder networks (Psi_c, Psi_v)
+    parser.add_argument("--vidon_enc_hidden", type=int, default=40, help="Hidden size for encoder networks")
+    parser.add_argument("--vidon_enc_n_layers", type=int, default=4, help="Number of layers in encoder networks")
+
+    # Head MLPs (omega_e, nu_e)
+    parser.add_argument("--vidon_head_hidden", type=int, default=128, help="Hidden size for head MLPs")
+    parser.add_argument("--vidon_head_n_layers", type=int, default=4, help="Number of layers in head MLPs")
+
+    # Combiner Phi
+    parser.add_argument("--vidon_combine_hidden", type=int, default=256, help="Hidden size for combiner network")
+    parser.add_argument("--vidon_combine_n_layers", type=int, default=4, help="Number of layers in combiner network")
+
+    # Trunk network tau
+    parser.add_argument("--vidon_trunk_hidden", type=int, default=256, help="Hidden size for trunk network")
+    parser.add_argument("--vidon_n_trunk_layers", type=int, default=4, help="Number of layers in trunk network")
+
+    parser.add_argument(
+        "--activation_fn",
+        type=str,
+        default="relu",
+        choices=["relu", "tanh", "gelu", "swish"],
+        help="Activation function",
+    )
+
+    # Training parameters
+    parser.add_argument("--vidon_lr", type=float, default=5e-4, help="Learning rate")
+    parser.add_argument("--vidon_epochs", type=int, default=50000, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
+    parser.add_argument(
+        "--lr_schedule_steps",
+        type=int,
+        nargs="+",
+        default=[15000, 30000, 125000, 175000, 1250000, 1500000],
+        help="LR decay milestone steps",
+    )
+    parser.add_argument(
+        "--lr_schedule_gammas",
+        type=float,
+        nargs="+",
+        default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5],
+        help="LR decay factors",
+    )
+
+    # Model loading
+    parser.add_argument("--load_model_path", type=str, default=None, help="Path to pre-trained model")
+
+    # Random seed and device
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument("--device", type=str, default="cuda:1", help="Torch device")
+
+    # TensorBoard logging
+    parser.add_argument("--enable_tensorboard", action="store_true", default=True, help="Enable TensorBoard logging")
+    parser.add_argument("--tb_eval_frequency", type=int, default=1000, help="TensorBoard evaluation frequency")
+    parser.add_argument("--tb_test_samples", type=int, default=100, help="Number of test samples for TB evaluation")
+
+    # Logging directory
+    parser.add_argument("--log_dir", type=str, default=None, help="Custom log directory")
+
+    return parser.parse_args()
+
+
+def setup_logging(project_root, custom_log_dir=None):
+    """Setup logging directory."""
+    if custom_log_dir:
+        log_dir = custom_log_dir
+    else:
+        logs_base = os.path.join(project_root, "logs")
+        model_folder = "VIDON_transport"
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_dir = os.path.join(logs_base, model_folder, timestamp)
+    os.makedirs(log_dir, exist_ok=True)
+    print(f"Logging to: {log_dir}")
+    return log_dir
+
+
+def get_activation_function(activation_name):
+    """Get activation function by name."""
+    activation_map = {
+        "relu": nn.ReLU,
+        "tanh": nn.Tanh,
+        "gelu": nn.GELU,
+        "swish": nn.SiLU,
+    }
+    return activation_map.get(activation_name.lower(), nn.ReLU)
+
+
+def create_model(args, device):
+    """Create VIDON model for transport map prediction."""
+    activation_fn = get_activation_function(args.activation_fn)
+
+    model = VIDON(
+        input_size_src=2,  # 2D coordinates (x, y) of source points
+        output_size_src=1,  # Uniform weights at source points
+        input_size_tgt=2,  # 2D coordinates (x, y) of query points
+        output_size_tgt=2,  # 2D displacement vectors (dx, dy)
+        p=args.vidon_p_dim,
+        n_heads=args.vidon_n_heads,
+        d_enc=args.vidon_d_enc,
+        head_output_size=args.vidon_head_output_size,
+        enc_hidden_size=args.vidon_enc_hidden,
+        enc_n_layers=args.vidon_enc_n_layers,
+        head_hidden_size=args.vidon_head_hidden,
+        head_n_layers=args.vidon_head_n_layers,
+        combine_hidden_size=args.vidon_combine_hidden,
+        combine_n_layers=args.vidon_combine_n_layers,
+        trunk_hidden_size=args.vidon_trunk_hidden,
+        n_trunk_layers=args.vidon_n_trunk_layers,
+        activation_fn=activation_fn,
+        initial_lr=args.vidon_lr,
+        lr_schedule_steps=args.lr_schedule_steps,
+        lr_schedule_gammas=args.lr_schedule_gammas,
+    ).to(device)
+
+    return model
+
+
+def evaluate_model(model, dataset, transport_dataset, device, n_test_samples=None):
+    """
+    Evaluate the model on test data using decoupled query points.
+
+    Uses GLOBAL L2 relative error: ||all_pred - all_target|| / ||all_target||
+    This accumulates predictions across all test samples for a single metric,
+    which is more standard in papers and weights samples by magnitude.
+
+    Args:
+        model: Trained VIDON model
+        dataset: HuggingFace dataset with 'test' split
+        transport_dataset: TransportDataset wrapper
+        device: Torch device
+        n_test_samples: Number of test samples (None = use all)
+
+    Returns:
+        dict with evaluation metrics
+    """
+    model.eval()
+    test_data = dataset["test"]
+    n_test = len(test_data) if n_test_samples is None else min(n_test_samples, len(test_data))
+
+    # Accumulate all predictions and targets for global L2
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for i in range(n_test):
+            sample = test_data[i]
+
+            # Load source points (sensors)
+            source_points = torch.tensor(
+                np.array(sample["source_points"]), device=device, dtype=torch.float32
+            )
+
+            # Load query points and ground truth (decoupled from sensors)
+            query_points = torch.tensor(
+                np.array(sample["query_points"]), device=device, dtype=torch.float32
+            )
+            query_vectors_gt = torch.tensor(
+                np.array(sample["query_vectors"]), device=device, dtype=torch.float32
+            )
+
+            # Add batch dimension
+            source_coords = source_points.unsqueeze(0)  # (1, n_sensors, 2)
+            source_weights = torch.ones(
+                1, source_points.shape[0], 1, device=device, dtype=torch.float32
+            )
+            query_coords = query_points.unsqueeze(0)  # (1, n_queries, 2)
+
+            # Forward pass: predict displacement at query points
+            # VIDON API: forward(xs, us, ys) -> (B, Q, d_out)
+            pred_vectors = model(source_coords, source_weights, query_coords)  # (1, n_queries, 2)
+
+            # Accumulate flattened predictions and targets
+            all_preds.append(pred_vectors.reshape(-1))
+            all_targets.append(query_vectors_gt.reshape(-1))
+
+    # Concatenate all predictions and targets
+    all_preds = torch.cat(all_preds, dim=0)  # (n_test * n_queries * 2,)
+    all_targets = torch.cat(all_targets, dim=0)  # (n_test * n_queries * 2,)
+
+    # Compute GLOBAL metrics
+    # Global MSE
+    global_mse = torch.mean((all_preds - all_targets) ** 2).item()
+
+    # Global L2 relative error: ||pred - target|| / ||target||
+    error_norm = torch.norm(all_preds - all_targets).item()
+    target_norm = torch.norm(all_targets).item()
+    global_rel_l2 = error_norm / (target_norm + 1e-8)
+
+    print(f"\nTest Results ({n_test} samples, {len(all_preds)} total points, global L2):")
+    print(f"  Transport Map:  MSE = {global_mse:.6e},  Rel L2 = {global_rel_l2:.6f}")
+
+    model.train()
+    return {
+        "mse_transport_map": global_mse,
+        "rel_l2_transport_map": global_rel_l2,
+        "relative_l2_error": global_rel_l2,  # Compatibility alias
+        "mse_loss": global_mse,  # Compatibility alias
+        "n_test_samples": n_test,
+        "n_total_points": len(all_preds),
+    }
+
+
+def main():
+    """Main training function."""
+    args = parse_arguments()
+    device = torch.device(args.device)
+    print(f"Using device: {device}")
+
+    # Validate arguments
+    if len(args.lr_schedule_steps) != len(args.lr_schedule_gammas):
+        raise ValueError("--lr_schedule_steps and --lr_schedule_gammas must have the same number of elements.")
+
+    # Set random seeds
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # Setup logging
+    log_dir = setup_logging(project_root, args.log_dir)
+
+    # Load dataset
+    dataset, transport_dataset = load_transport_dataset(
+        data_path=args.data_path,
+        batch_size=args.batch_size,
+        device=device,
+        mode=args.mode,
+    )
+
+    if dataset is None or transport_dataset is None:
+        print("Failed to load dataset. Exiting.")
+        return
+
+    # Verify we have decoupled queries
+    if transport_dataset.has_queries:
+        print(f"Decoupled queries enabled: {transport_dataset.n_query_points} query points per sample")
+    else:
+        print("WARNING: Dataset does not have decoupled queries. Using legacy ys=xs mode.")
+
+    # Create model
+    print("Creating VIDON model...")
+    model = create_model(args, device)
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {total_params:,}")
+
+    # Load pre-trained model if specified
+    model_was_loaded = False
+    if args.load_model_path:
+        if os.path.exists(args.load_model_path):
+            print(f"Loading pre-trained model from: {args.load_model_path}")
+            model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            model_was_loaded = True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
+
+    # Setup TensorBoard callback
+    callback = None
+    if args.enable_tensorboard:
+        print("Setting up TensorBoard logging...")
+        tb_log_dir = os.path.join(log_dir, "tensorboard")
+        callback = TensorBoardCallback(
+            log_dir=tb_log_dir,
+            dataset=dataset,
+            dataset_wrapper=transport_dataset,
+            device=device,
+            eval_frequency=args.tb_eval_frequency,
+            n_test_samples=args.tb_test_samples,
+            eval_sensor_dropoff=0.0,
+            replace_with_nearest=False,
+        )
+        print(f"TensorBoard logs: {tb_log_dir}")
+        print(f"View with: tensorboard --logdir {tb_log_dir}")
+
+    # Train model
+    if not model_was_loaded:
+        print(f"\nStarting training for {args.vidon_epochs} epochs...")
+        print(f"Training on {transport_dataset.n_source_points} sensors -> {transport_dataset.n_query_points} queries")
+
+        model.train_model(
+            dataset=transport_dataset,
+            epochs=args.vidon_epochs,
+            progress_bar=True,
+            callback=callback,
+        )
+    else:
+        print("\nVIDON transport-Q model loaded. Skipping training.")
+
+    # Evaluate model on ALL test samples (global L2)
+    print("\nEvaluating model on test set...")
+    test_results = evaluate_model(
+        model, dataset, transport_dataset, device, n_test_samples=None
+    )
+
+    # Save experiment configuration
+    save_experiment_configuration(
+        args,
+        model,
+        dataset,
+        transport_dataset,
+        device,
+        log_dir,
+        dataset_type="transport_q",
+        test_results=test_results,
+    )
+
+    # Generate plots
+    print("\nGenerating plots...")
+    for i in range(3):
+        plot_save_path = os.path.join(log_dir, f"transport_sample_{i}.png")
+        plot_transport_q_overlay(model, dataset, transport_dataset, device, sample_idx=i,
+                                  save_path=plot_save_path, dataset_split="test")
+
+    # Save model
+    if not model_was_loaded:
+        model_save_path = os.path.join(log_dir, "transport_vidon_model.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved to: {model_save_path}")
+
+    print("\nTraining completed!")
+    print(f"Final Rel L2 Error: {test_results['rel_l2_transport_map']:.6f}")
+
+
+if __name__ == "__main__":
+    main()
