@@ -93,6 +93,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", "-n", action="store_true", help="Show jobs without executing")
     p.add_argument("--check-run", action="store_true", help="Quick test run with 10 epochs per job")
     p.add_argument("--reaggregate", action="store_true", help="Re-aggregate results from existing logs only")
+    p.add_argument("--regen-plots", action="store_true", help="Regenerate plots only (load existing models, skip training)")
     p.add_argument("--seeds", help="Override seeds (comma-separated)")
     p.add_argument("--benchmarks", help="Override benchmarks (comma-separated)")
     p.add_argument("--models", choices=["setonet", "deeponet", "vidon", "all"], help="Filter models by base type")
@@ -184,6 +185,25 @@ def main():
             else:
                 job.overrides["don_epochs"] = 10
 
+    # Apply regen-plots mode: find existing models and set load_model_path
+    if args.regen_plots:
+        logging.info("REGEN PLOTS: Loading existing models, skipping training")
+        valid_jobs = []
+        for job in jobs:
+            # Find model file in expected location
+            job_log_dir = logs_all_dir / job.benchmark / job.model / f"seed_{job.seed}"
+            model_files = list(job_log_dir.glob("*.pth")) if job_log_dir.exists() else []
+            if model_files:
+                job.overrides["load_model_path"] = str(model_files[0])
+                valid_jobs.append(job)
+                logging.debug(f"Found model for {job.job_id}: {model_files[0]}")
+            else:
+                logging.warning(f"No model found for {job.job_id}, skipping")
+        jobs = valid_jobs
+        if not jobs:
+            print("No existing models found to regenerate plots for.")
+            sys.exit(0)
+
     # Use custom output dir or default logs_all
     if args.output_dir:
         logs_all_dir = Path(args.output_dir)
@@ -194,7 +214,12 @@ def main():
     save_configs_and_param_table(script_dir, results_dir)
 
     if args.dry_run:
-        mode = "CHECK RUN (10 epochs)" if args.check_run else "DRY RUN"
+        if args.regen_plots:
+            mode = "REGEN PLOTS (load models, skip training)"
+        elif args.check_run:
+            mode = "CHECK RUN (10 epochs)"
+        else:
+            mode = "DRY RUN"
         print(f"\n{mode} - {len(jobs)} jobs:\n")
         print(f"{'#':<4} {'Job ID':<40} {'Device':<12} Log Dir")
         print("-" * 90)

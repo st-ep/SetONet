@@ -110,20 +110,34 @@ class TensorBoardCallback:
             return self._evaluate_with_dataset(model)
     
     def _evaluate_with_wrapper(self, model):
-        """Evaluate using test dataset directly for Darcy data."""
-        # For Darcy data, evaluate on actual test data instead of training data
+        """Evaluate using test dataset directly for Burgers/Darcy data."""
         test_data = self.dataset['test']
         n_test = min(self.n_test_samples, len(test_data))
-        
+
         total_rel_error = 0.0
         total_mse_loss = 0.0
-        
+
         with torch.no_grad():
             for i in range(n_test):
                 sample = test_data[i]
-                
-                # Get sensor and query data (similar to main script evaluation)
-                xs_data = torch.tensor(sample['u'], device=self.device)[self.dataset_wrapper.sensor_indices].unsqueeze(0).unsqueeze(-1)
+
+                # Get full grid data
+                u_full = torch.tensor(sample['u'], device=self.device)
+
+                # Get sensor values - handle both direct indexing and interpolation
+                if self.dataset_wrapper.sensor_indices is not None:
+                    # Direct indexing (sensor_size <= grid_size)
+                    us_data = u_full[self.dataset_wrapper.sensor_indices]
+                else:
+                    # Interpolation (sensor_size > grid_size)
+                    # Use the dataset wrapper's interpolation method
+                    us_data = self.dataset_wrapper._interpolate_sensors(
+                        u_full.unsqueeze(0),  # Add batch dim
+                        self.dataset_wrapper.grid_points,
+                        self.dataset_wrapper.sensor_x
+                    ).squeeze(0)  # Remove batch dim
+
+                xs_data = us_data.unsqueeze(0).unsqueeze(-1)  # [1, n_sensors, 1]
                 ys_data = self.dataset_wrapper.query_x.unsqueeze(0)
                 target = torch.tensor(sample['s'], device=self.device)[self.dataset_wrapper.query_indices].unsqueeze(0).unsqueeze(-1)
                 

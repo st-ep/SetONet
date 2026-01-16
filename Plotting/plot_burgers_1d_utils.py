@@ -4,13 +4,67 @@ import os
 import numpy as np
 
 
+def interpolate_to_sensors(data_grid, grid_points, sensor_x):
+    """
+    Interpolate values from grid to sensor locations using linear interpolation.
+
+    Args:
+        data_grid: (n_samples, n_grid) or (n_grid,) grid values
+        grid_points: (n_grid,) grid coordinates
+        sensor_x: (n_sensors, 1) sensor locations
+
+    Returns:
+        interpolated: (n_samples, n_sensors) or (n_sensors,) interpolated values
+    """
+    # Handle 1D case
+    if data_grid.dim() == 1:
+        data_grid = data_grid.unsqueeze(0)
+        squeeze_output = True
+    else:
+        squeeze_output = False
+
+    device = data_grid.device
+    grid_points = grid_points.to(device)
+    sensor_x = sensor_x.to(device)
+
+    n_grid = data_grid.shape[1]
+    sensor_x_flat = sensor_x.squeeze(-1)
+
+    # Find surrounding grid points using binary search
+    indices = torch.searchsorted(grid_points, sensor_x_flat)
+    indices = torch.clamp(indices, 1, n_grid - 1)
+
+    # Get left and right indices
+    idx_left = indices - 1
+    idx_right = indices
+
+    # Get x coordinates
+    x_left = grid_points[idx_left]
+    x_right = grid_points[idx_right]
+
+    # Compute interpolation weights
+    weights = (sensor_x_flat - x_left) / (x_right - x_left + 1e-10)
+    weights = weights.clamp(0.0, 1.0)
+
+    # Interpolate
+    y_left = data_grid[:, idx_left]
+    y_right = data_grid[:, idx_right]
+    weights_broadcast = weights.unsqueeze(0)
+    interpolated = y_left + weights_broadcast * (y_right - y_left)
+
+    if squeeze_output:
+        interpolated = interpolated.squeeze(0)
+
+    return interpolated
+
+
 def plot_burgers_comparison(
     model_to_use,
     dataset,
     sensor_x,
     query_x,
     sensor_indices,
-    query_indices, 
+    query_indices,
     log_dir,
     num_samples_to_plot=3,
     plot_filename_prefix="burgers_comparison",
@@ -21,7 +75,8 @@ def plot_burgers_comparison(
     variable_sensors=False,
     grid_points=None,
     sensors_to_plot_fraction=0.1,
-    stats=None
+    stats=None,
+    start_index=0
 ):
     """
     Plot comparison between true and predicted solutions for Burgers 1D problem.
@@ -44,6 +99,7 @@ def plot_burgers_comparison(
         grid_points: Grid points tensor
         sensors_to_plot_fraction: Fraction of sensors to show as markers
         stats: Normalization statistics for denormalization
+        start_index: Starting index in the dataset split (default 0)
     """
     print(f"Generating Burgers 1D comparison plots...")
     
@@ -73,18 +129,28 @@ def plot_burgers_comparison(
             return data
         return data * std + mean
     
-    for i in range(min(num_samples_to_plot, len(data_split))):
+    for i in range(num_samples_to_plot):
+        sample_idx = start_index + i
+        if sample_idx >= len(data_split):
+            break
         fig, axs = plt.subplots(1, 2, figsize=(14, 6))
-        
+
         # Get sample data
-        sample = data_split[i]
-        
+        sample = data_split[sample_idx]
+
         # Extract initial condition (normalized) and solution (normalized)
         u_full = torch.tensor(sample['u'], device=device, dtype=torch.float32)  # Normalized initial condition
         s_full = torch.tensor(sample['s'], device=device, dtype=torch.float32)  # Normalized solution
-        
-        # Get sensor and query data
-        u_sensors = u_full[sensor_indices]  # Initial condition at sensor locations
+
+        # Get sensor data - handle both direct indexing and interpolation
+        if sensor_indices is not None:
+            # Direct indexing (sensor_size <= grid_size)
+            u_sensors = u_full[sensor_indices]  # Initial condition at sensor locations
+        else:
+            # Interpolation (sensor_size > grid_size)
+            u_sensors = interpolate_to_sensors(u_full.unsqueeze(0), grid_points, sensor_x).squeeze(0)
+
+        # Get query data
         s_queries_true = s_full[query_indices]  # True solution at query points
         
         # Convert grid points to CPU for plotting
@@ -146,7 +212,8 @@ def plot_burgers_comparison(
         
         # Add sensor dropout info if applicable
         if sensor_dropoff > 0:
-            original_count = len(sensor_indices)
+            # Use sensor_x length instead of sensor_indices (which can be None for interpolation)
+            original_count = len(sensor_x)
             dropout_info = f'Dropout: {sensor_dropoff:.1%} ({original_count}→{len(sensor_x_plot)})'
             if replace_with_nearest:
                 dropout_info += ' (nearest replacement)'

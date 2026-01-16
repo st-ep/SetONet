@@ -108,14 +108,15 @@ def load_burgers_dataset(device="cpu"):
 
 class BurgersDataGenerator:
     """Dataset wrapper for Burgers 1D data that's compatible with SetONet training loop."""
-    
-    def __init__(self, dataset, sensor_indices, query_indices, device, params, grid_points, stats=None):
+
+    def __init__(self, dataset, sensor_x, sensor_indices, query_indices, device, params, grid_points, stats=None):
         """
         Initialize the Burgers data generator.
-        
+
         Args:
             dataset: Dictionary with 'train' and 'test' splits
-            sensor_indices: Indices for sensor locations in the grid
+            sensor_x: Tensor of sensor coordinates (n_sensors, 1)
+            sensor_indices: Indices for sensor locations in the grid (or None if interpolated)
             query_indices: Indices for query locations in the grid
             device: PyTorch device
             params: Dictionary with training parameters
@@ -151,9 +152,8 @@ class BurgersDataGenerator:
         
         # Store query points for TensorBoard callback compatibility
         self.query_x = self.grid_points[self.query_indices].view(-1, 1)
-        
+
         # Dataset structure info (like elastic dataset)
-        self.n_force_points = len(sensor_indices)  # Number of sensor points
         self.n_mesh_points = len(query_indices)    # Number of query points
         self.input_dim = 1  # 1D coordinates
         
@@ -162,17 +162,73 @@ class BurgersDataGenerator:
         
         self.train_sensor_dropoff = params.get('train_sensor_dropoff', 0.0)
         self.replace_with_nearest = params.get('replace_with_nearest', False)
-        
+
         # Fixed sensors: pre-extract sensor data for efficiency
-        self.sensor_indices = sensor_indices.to(device)
-        self.sensor_x = self.grid_points[self.sensor_indices].view(-1, 1)
-        self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
+        # Store sensor locations (passed from create_sensor_points)
+        self.sensor_x = sensor_x
+
+        # Extract sensor values (direct indexing or interpolation)
+        if sensor_indices is not None:
+            # Direct indexing from grid (sensor_size <= grid_size)
+            self.sensor_indices = sensor_indices.to(device)
+            self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
+            self.n_force_points = len(sensor_indices)
+        else:
+            # Interpolation (sensor_size > grid_size)
+            self.sensor_indices = None
+            self.u_sensors = self._interpolate_sensors(self.u_data, self.grid_points, sensor_x)
+            self.n_force_points = sensor_x.shape[0]
+
         print(f"✅ Burgers dataset optimized: {n_train} samples pre-loaded to GPU (FIXED sensors)")
-        
+
         if self.train_sensor_dropoff > 0.0:
             replacement_mode = "nearest replacement" if self.replace_with_nearest else "removal"
             print(f"⚠️ Training with {self.train_sensor_dropoff:.1%} sensor dropout ({replacement_mode})")
-    
+
+    def _interpolate_sensors(self, data_grid, grid_points, sensor_x):
+        """
+        Interpolate sensor values from grid data using linear interpolation.
+
+        Args:
+            data_grid: (n_samples, n_grid) grid values for all samples
+            grid_points: (n_grid,) grid coordinates in [0, 1]
+            sensor_x: (n_sensors, 1) target sensor locations
+
+        Returns:
+            interpolated_values: (n_samples, n_sensors) interpolated sensor values
+        """
+        n_grid = data_grid.shape[1]
+
+        # Flatten sensor_x to 1D for searchsorted
+        sensor_x_flat = sensor_x.squeeze(-1)  # (n_sensors,)
+
+        # Find indices of surrounding grid points using binary search
+        # grid_points is sorted, so searchsorted gives us the right index
+        indices = torch.searchsorted(grid_points, sensor_x_flat)  # (n_sensors,)
+
+        # Clamp indices to valid range [1, n_grid-1]
+        indices = torch.clamp(indices, 1, n_grid - 1)
+
+        # Get left and right grid indices
+        idx_left = indices - 1  # (n_sensors,)
+        idx_right = indices      # (n_sensors,)
+
+        # Get x coordinates of surrounding points
+        x_left = grid_points[idx_left]   # (n_sensors,)
+        x_right = grid_points[idx_right]  # (n_sensors,)
+
+        # Compute interpolation weights
+        weights = (sensor_x_flat - x_left) / (x_right - x_left + 1e-10)  # (n_sensors,)
+        weights = weights.clamp(0.0, 1.0)  # Safety clamp
+
+        # Vectorized interpolation for all samples
+        y_left = data_grid[:, idx_left]   # (n_samples, n_sensors)
+        y_right = data_grid[:, idx_right]  # (n_samples, n_sensors)
+        weights_broadcast = weights.unsqueeze(0)  # (1, n_sensors)
+        interpolated = y_left + weights_broadcast * (y_right - y_left)
+
+        return interpolated
+
     def sample(self, device=None):
         """Sample a batch using pre-loaded GPU tensors (compatible with SetONet training loop)."""
         # Random sampling directly on GPU (much faster)
@@ -252,12 +308,24 @@ class BurgersDataGenerator:
 
 
 def create_sensor_points(params, device, grid_points):
-    """Create fixed sensor points from the grid."""
-    # Use fixed sensor locations - evenly spaced subset of grid points
-    sensor_indices = torch.linspace(0, len(grid_points)-1, params['sensor_size'], dtype=torch.long)
-    sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
-    print(f"Using {params['sensor_size']} FIXED sensor locations (evenly spaced)")
-    return sensor_x, sensor_indices
+    """Create fixed sensor points from the grid (with interpolation if sensor_size > grid_size)."""
+    n_grid = len(grid_points)
+    sensor_size = params['sensor_size']
+
+    if sensor_size <= n_grid:
+        # Use direct indexing (current approach)
+        sensor_indices = torch.linspace(0, n_grid-1, sensor_size, dtype=torch.long)
+        sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
+        print(f"Using {sensor_size} FIXED sensor locations (evenly spaced, direct indexing)")
+        return sensor_x, sensor_indices
+    else:
+        # Use interpolation to create more sensors than grid points
+        # IMPORTANT: Match the range of the grid points, not hardcode [0, 1]
+        grid_min = grid_points.min().item()
+        grid_max = grid_points.max().item()
+        sensor_x = torch.linspace(grid_min, grid_max, sensor_size, dtype=torch.float32, device=device).view(-1, 1)
+        print(f"Using {sensor_size} FIXED sensor locations (evenly spaced in [{grid_min:.4f}, {grid_max:.4f}], interpolated from {n_grid} grid points)")
+        return sensor_x, None  # None indicates interpolation mode
 
 
 def create_query_points(params, device, grid_points, n_query_points):

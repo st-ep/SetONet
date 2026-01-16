@@ -192,34 +192,98 @@ def run_single_job(job: Job, benchmarks_dir: Path, project_root: Path, logs_all_
         cmd = [sys.executable, str(script_path), "--seed", str(job.seed), "--device", job.device,
                "--log_dir", str(job_log_dir)]
         
+        # Track arguments set by benchmark-specific handling to prevent config overrides
+        protected_args = set()
+
         # Handle 1d benchmarks which require --benchmark argument and variant-specific flags
         if job.benchmark.startswith("1d_"):
             # Parse: 1d_integral, 1d_integral_varsens, 1d_integral_robust, etc.
             parts = job.benchmark.split("_")
             benchmark_type = parts[1]  # "integral" or "derivative"
             cmd.extend(["--benchmark", benchmark_type])
-            
+
             # Handle variants
             if len(parts) > 2:
                 variant = parts[2]
                 if variant == "varsens":
                     cmd.append("--variable_sensors")
+                    protected_args.add("variable_sensors")
                 elif variant == "robust":
+                    # Robust evaluation uses variable sensors AND sensor dropout
+                    cmd.append("--variable_sensors")
                     cmd.extend(["--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
-        
+                    protected_args.update(["variable_sensors", "eval_sensor_dropoff", "replace_with_nearest"])
+
+                    # Load checkpoint from varsens benchmark (not base) to skip training
+                    clean_benchmark = f"1d_{benchmark_type}_varsens"  # e.g., "1d_integral_varsens"
+                    clean_checkpoint_dir = logs_all_dir / clean_benchmark / job.model / f"seed_{job.seed}"
+
+                    # Find checkpoint file (naming varies by benchmark/model)
+                    checkpoint_patterns = [
+                        f"1d_{benchmark_type}*model.pth",
+                        f"integral*model.pth" if benchmark_type == "integral" else f"derivative*model.pth",
+                        "*model.pth",
+                        "best_model.pth",
+                    ]
+                    checkpoint_path = None
+                    for pattern in checkpoint_patterns:
+                        matches = list(clean_checkpoint_dir.glob(pattern))
+                        if matches:
+                            checkpoint_path = matches[0]
+                            break
+
+                    if checkpoint_path and checkpoint_path.exists():
+                        cmd.extend(["--load_model_path", str(checkpoint_path)])
+                        protected_args.add("load_model_path")
+                        logging.info(f"Will load checkpoint from: {checkpoint_path}")
+                    else:
+                        logging.warning(f"No checkpoint found for {job.benchmark} in {clean_checkpoint_dir} - will train from scratch")
+
         # Handle robust variants for elastic_2d and darcy_1d
         if job.benchmark.endswith("_robust_train"):
             cmd.extend(["--train_sensor_dropoff", "0.2", "--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
+            protected_args.update(["train_sensor_dropoff", "eval_sensor_dropoff", "replace_with_nearest"])
         elif job.benchmark.endswith("_robust_eval"):
             cmd.extend(["--eval_sensor_dropoff", "0.2", "--replace_with_nearest"])
-        
+            protected_args.update(["eval_sensor_dropoff", "replace_with_nearest"])
+
+            # Load checkpoint from clean (non-robust) benchmark to skip training
+            clean_benchmark = job.benchmark.replace("_robust_eval", "")
+            clean_checkpoint_dir = logs_all_dir / clean_benchmark / job.model / f"seed_{job.seed}"
+
+            # Find checkpoint file (naming varies by benchmark/model)
+            checkpoint_patterns = [
+                f"{clean_benchmark.replace('_', '')}*model.pth",  # e.g., darcy1d_setonet_model.pth
+                f"{clean_benchmark}*model.pth",
+                "*model.pth",
+                "best_model.pth",
+            ]
+            checkpoint_path = None
+            for pattern in checkpoint_patterns:
+                matches = list(clean_checkpoint_dir.glob(pattern))
+                if matches:
+                    checkpoint_path = matches[0]
+                    break
+
+            if checkpoint_path and checkpoint_path.exists():
+                cmd.extend(["--load_model_path", str(checkpoint_path)])
+                protected_args.add("load_model_path")
+                logging.info(f"Will load checkpoint from: {checkpoint_path}")
+            else:
+                logging.warning(f"No checkpoint found for {job.benchmark} in {clean_checkpoint_dir} - will train from scratch")
+
         # Handle heat_2d dataset variants
         if job.benchmark == "heat_2d_P30":
             cmd.extend(["--data_path", str(project_root / "Data" / "heat_data" / "pcb_heat_adaptive_dataset8.0_n8192_N25_P30")])
+            protected_args.add("data_path")
         elif job.benchmark == "heat_2d_P10":
             cmd.extend(["--data_path", str(project_root / "Data" / "heat_data" / "pcb_heat_adaptive_dataset9.0_n8192_N25_P10")])
-        
+            protected_args.add("data_path")
+
+        # Apply config overrides, but skip protected arguments to preserve benchmark-specific settings
         for key, value in job.overrides.items():
+            if key in protected_args:
+                continue  # Skip - already set by benchmark-specific handling above
             if isinstance(value, bool):
                 if value: cmd.append(f"--{key}")
             elif isinstance(value, list):

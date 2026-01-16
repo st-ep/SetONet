@@ -27,7 +27,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train VIDON for Burgers 1D equation.")
     
     # Data parameters
-    parser.add_argument('--sensor_size', type=int, default=100, help='Number of sensor locations (max 128 for Burgers 1D grid)')
+    parser.add_argument('--sensor_size', type=int, default=300, help='Number of sensor locations (128 grid points available, interpolation used if > 128)')
     
     # Model architecture - VIDON specific
     parser.add_argument('--vidon_p_dim', type=int, default=32, help='Number of trunk basis functions (excluding τ0)')
@@ -209,7 +209,7 @@ def main():
     model_was_loaded = load_pretrained_model(vidon_model, args, device)
     
     # Create data generator
-    data_generator = BurgersDataGenerator(dataset, sensor_indices, query_indices, device, params, grid_points, stats)
+    data_generator = BurgersDataGenerator(dataset, sensor_x, sensor_indices, query_indices, device, params, grid_points, stats)
     
     # Setup TensorBoard callback if enabled
     callback = None
@@ -303,7 +303,8 @@ def main():
             num_samples_to_plot=1, plot_filename_prefix=f"burgers_1d_test_{i}",
             sensor_dropoff=args.eval_sensor_dropoff, replace_with_nearest=args.replace_with_nearest,
             dataset_split="test", batch_size=args.batch_size, variable_sensors=False,
-            grid_points=grid_points, sensors_to_plot_fraction=0.1, stats=stats
+            grid_points=grid_points, sensors_to_plot_fraction=0.1, stats=stats,
+            start_index=i
         )
     
     # Save model

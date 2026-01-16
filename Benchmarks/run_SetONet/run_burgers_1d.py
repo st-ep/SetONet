@@ -27,7 +27,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Train SetONet for Burgers 1D equation.")
     
     # Data parameters
-    parser.add_argument('--sensor_size', type=int, default=100, help='Number of sensor locations (max 128 for Burgers 1D grid)')
+    parser.add_argument('--sensor_size', type=int, default=300, help='Number of sensor locations (128 grid points available, interpolation used if > 128)')
     
     # Model architecture
     parser.add_argument('--son_p_dim', type=int, default=32, help='Latent dimension p for SetONet')
@@ -92,7 +92,7 @@ def parse_arguments():
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
+    parser.add_argument('--device', type=str, default='cuda:1', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
@@ -227,7 +227,7 @@ def main():
     model_was_loaded = load_pretrained_model(setonet_model, args, device)
     
     # Create data generator
-    data_generator = BurgersDataGenerator(dataset, sensor_indices, query_indices, device, params, grid_points, stats)
+    data_generator = BurgersDataGenerator(dataset, sensor_x, sensor_indices, query_indices, device, params, grid_points, stats)
     
     # Setup TensorBoard callback if enabled
     callback = None
@@ -270,8 +270,19 @@ def main():
     with torch.no_grad():
         for i in range(n_test):
             sample = test_data[i]
-            
-            xs_data = torch.tensor(sample['u'], device=device)[sensor_indices].unsqueeze(0).unsqueeze(-1)
+
+            # Handle both direct indexing and interpolation
+            if sensor_indices is not None:
+                # Direct indexing (sensor_size <= grid_size)
+                xs_data = torch.tensor(sample['u'], device=device)[sensor_indices].unsqueeze(0).unsqueeze(-1)
+            else:
+                # Interpolation (sensor_size > grid_size)
+                xs_data = data_generator._interpolate_sensors(
+                    torch.tensor(sample['u'], device=device).unsqueeze(0),
+                    grid_points.to(device),
+                    sensor_x
+                ).unsqueeze(-1)
+
             ys_data = query_x.unsqueeze(0)
             target = torch.tensor(sample['s'], device=device)[query_indices].unsqueeze(0).unsqueeze(-1)
             
@@ -317,7 +328,8 @@ def main():
             num_samples_to_plot=1, plot_filename_prefix=f"burgers_1d_test_{i}",
             sensor_dropoff=args.eval_sensor_dropoff, replace_with_nearest=args.replace_with_nearest,
             dataset_split="test", batch_size=args.batch_size, variable_sensors=False,
-            grid_points=grid_points, sensors_to_plot_fraction=0.1, stats=stats
+            grid_points=grid_points, sensors_to_plot_fraction=0.1, stats=stats,
+            start_index=i
         )
     
     # Save model
