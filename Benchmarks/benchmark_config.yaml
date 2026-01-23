@@ -37,7 +37,7 @@ models:
   - setonet_mean
 #  - setonet_petrov
 #  - setonet_galerkin
-  - setonet_quadrature
+#  - setonet_quadrature
 #  - setonet_adaptive
 
 # -----------------------------------------------------------------------------
@@ -60,16 +60,16 @@ models:
 #   - *_robust_eval  : eval only with 20% sensor dropout + nearest replacement
 # -----------------------------------------------------------------------------
 benchmarks:
-# - heat_2d_P30
-# - heat_2d_P10
+#  - heat_2d_P30
+#  - heat_2d_P10
 #  - elastic_2d
-#  - elastic_2d_robust_train
+  - elastic_2d_robust_train
 #  - elastic_2d_robust_eval
 #  - darcy_1d
 #  - darcy_1d_robust_train
 #  - darcy_1d_robust_eval
 #  - burgers_1d
-  - burgers_1d_robust_train
+#  - burgers_1d_robust_train
 #  - burgers_1d_robust_eval
 #  - 1d_integral
 #  - 1d_derivative

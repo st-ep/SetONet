@@ -253,9 +253,14 @@ def main():
     print(f"Model parameters: {total_params:,}")
     
     # Load pre-trained model if specified
+    model_was_loaded = False
     if args.load_model_path:
-        print(f"Loading pre-trained model from: {args.load_model_path}")
-        model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+        if os.path.exists(args.load_model_path):
+            print(f"Loading pre-trained model from: {args.load_model_path}")
+            model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            model_was_loaded = True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
     
     # Setup TensorBoard callback if enabled
     callback = None
@@ -275,15 +280,17 @@ def main():
         print(f"TensorBoard logs will be saved to: {tb_log_dir}")
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
     
-    # Train model
-    print(f"\nStarting training for {args.son_epochs} epochs...")
-    
-    model.train_model(
-        dataset=heat_dataset,
-        epochs=args.son_epochs,
-        progress_bar=True,
-        callback=callback
-    )
+    # Train model (skip if model was loaded)
+    if not model_was_loaded:
+        print(f"\nStarting training for {args.son_epochs} epochs...")
+        model.train_model(
+            dataset=heat_dataset,
+            epochs=args.son_epochs,
+            progress_bar=True,
+            callback=callback
+        )
+    else:
+        print(f"\nSetONet model loaded. Skipping training.")
     
     # Evaluate model
     print("\nEvaluating model...")
@@ -313,10 +320,11 @@ def main():
     # Save experiment configuration with test results
     save_experiment_configuration(args, model, dataset, heat_dataset, device, log_dir, dataset_type="heat_2d", test_results=test_results)
     
-    # Save model
-    model_save_path = os.path.join(log_dir, "heat2d_setonet_model.pth")
-    torch.save(model.state_dict(), model_save_path)
-    print(f"Model saved to: {model_save_path}")
+    # Save model (skip if model was loaded)
+    if not model_was_loaded:
+        model_save_path = os.path.join(log_dir, "heat2d_setonet_model.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved to: {model_save_path}")
     print("Training completed!")
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ from Models.VIDON import VIDON
 WARMUP_EPOCHS = 100
 MEASURED_EPOCHS = 1000
 DEFAULT_SEEDS = [0, 1, 2, 3, 4]
-DEFAULT_DEVICE = "cuda:1"
+DEFAULT_DEVICE = "cuda:0"
 
 # Model variants to benchmark (matches benchmark_utils.py exactly)
 MODEL_VARIANTS = {
@@ -63,41 +63,15 @@ MODEL_VARIANTS = {
         "benchmark_overrides": {
             ("transport",): {"pos_encoding_max_freq": 0.1},
         }},
-    "setonet_petrov": {"base": "setonet", "overrides": {"son_branch_head_type": "petrov_attention"},
-        "benchmark_overrides": {
-            ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
-            ("transport",): {"pos_encoding_max_freq": 0.1},
-        }},
-    "setonet_galerkin": {"base": "setonet", "overrides": {"son_branch_head_type": "galerkin_pou"},
-        "benchmark_overrides": {
-            ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
-            ("transport",): {"pos_encoding_max_freq": 0.1},
-        }},
     "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"},
         "benchmark_overrides": {
             ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
-            ("transport",): {"pos_encoding_max_freq": 0.1},
-        }},
-    "setonet_adaptive": {"base": "setonet", "overrides": {"son_branch_head_type": "adaptive_quadrature"},
-        "benchmark_overrides": {
-            ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 185},
             ("transport",): {"pos_encoding_max_freq": 0.1},
         }},
 }
 
 # Benchmark configurations
 BENCHMARKS = {
-    "darcy_1d": {
-        "data_path": "Data/darcy_1d_data/darcy_1d_dataset_501",
-        "input_size_src": 1,
-        "output_size_src": 1,
-        "input_size_tgt": 1,
-        "output_size_tgt": 1,
-        "config_file": "setonet_1d.yaml",
-        "vidon_config_file": "vidon_1d.yaml",
-        "deeponet_config_file": "deeponet_1d.yaml",
-        "sensor_size": 300,
-    },
     "elastic_2d": {
         "data_path": "Data/elastic_2d_data/elastic_dataset",
         "input_size_src": 2,
@@ -125,9 +99,7 @@ class TimingResult:
     warmup_epochs: int
     measured_epochs: int
     batch_size: int
-    total_samples: int
     elapsed_seconds: float
-    samples_per_second: float
     time_per_iter_ms: float
 
 
@@ -138,8 +110,6 @@ class AggregatedResult:
     benchmark: str
     n_seeds: int
     batch_size: int
-    samples_per_sec_mean: float
-    samples_per_sec_std: float
     time_per_iter_ms_mean: float
     time_per_iter_ms_std: float
 
@@ -305,33 +275,6 @@ def create_model(model_name: str, benchmark: str, device: torch.device) -> Optio
 # Dataset Loading
 # =============================================================================
 
-def load_darcy_dataset(device: torch.device, batch_size: int):
-    """Load Darcy 1D dataset and return data generator."""
-    from Data.darcy_1d_data.darcy_1d_dataset import (
-        load_darcy_dataset as _load_darcy,
-        DarcyDataGenerator,
-        create_sensor_points,
-        create_query_points,
-    )
-
-    data_path = PROJECT_ROOT / BENCHMARKS["darcy_1d"]["data_path"]
-    dataset = _load_darcy(str(data_path))
-    grid_points = torch.tensor(dataset['train'][0]['X'], dtype=torch.float32)
-
-    # Setup parameters (DarcyDataGenerator expects 'batch_size_train')
-    params = {
-        'sensor_size': 300,
-        'batch_size_train': batch_size,
-        'train_sensor_dropoff': 0.0,
-    }
-
-    sensor_x, sensor_indices = create_sensor_points(params, device, grid_points)
-    query_x, query_indices = create_query_points(params, device, grid_points, n_query_points=300)
-
-    data_generator = DarcyDataGenerator(dataset, sensor_indices, query_indices, device, params, grid_points)
-    return data_generator, batch_size
-
-
 def load_elastic_dataset(device: torch.device, batch_size: int):
     """Load Elastic 2D dataset and return data generator."""
     from Data.elastic_2d_data.elastic_2d_dataset import load_elastic_dataset as _load_elastic
@@ -347,9 +290,7 @@ def load_elastic_dataset(device: torch.device, batch_size: int):
 
 def get_dataset_loader(benchmark: str):
     """Get dataset loader function for benchmark."""
-    if benchmark == "darcy_1d":
-        return load_darcy_dataset
-    elif benchmark == "elastic_2d":
+    if benchmark == "elastic_2d":
         return load_elastic_dataset
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
@@ -459,7 +400,6 @@ def run_single_timing(
         use_sensor_mask=use_sensor_mask,
     )
 
-    samples_per_second = total_samples / elapsed
     time_per_iter_ms = (elapsed / MEASURED_EPOCHS) * 1000
 
     return TimingResult(
@@ -469,9 +409,7 @@ def run_single_timing(
         warmup_epochs=WARMUP_EPOCHS,
         measured_epochs=MEASURED_EPOCHS,
         batch_size=batch_size,
-        total_samples=total_samples,
         elapsed_seconds=elapsed,
-        samples_per_second=samples_per_second,
         time_per_iter_ms=time_per_iter_ms,
     )
 
@@ -491,7 +429,6 @@ def aggregate_results(results: List[TimingResult]) -> List[AggregatedResult]:
     aggregated = []
     # Sort by (benchmark, model) so all models for one benchmark come first
     for (benchmark, model), runs in sorted(grouped.items()):
-        sps = [r.samples_per_second for r in runs]
         tpi = [r.time_per_iter_ms for r in runs]
         batch_size = runs[0].batch_size
 
@@ -500,8 +437,6 @@ def aggregate_results(results: List[TimingResult]) -> List[AggregatedResult]:
             benchmark=benchmark,
             n_seeds=len(runs),
             batch_size=batch_size,
-            samples_per_sec_mean=mean(sps),
-            samples_per_sec_std=stdev(sps) if len(sps) > 1 else 0.0,
             time_per_iter_ms_mean=mean(tpi),
             time_per_iter_ms_std=stdev(tpi) if len(tpi) > 1 else 0.0,
         ))
@@ -510,45 +445,13 @@ def aggregate_results(results: List[TimingResult]) -> List[AggregatedResult]:
 
 
 def save_results(
-    individual_results: List[TimingResult],
     aggregated_results: List[AggregatedResult],
     output_dir: Path,
 ) -> None:
     """Save results to CSV files."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save individual results
-    individual_path = output_dir / "timing_individual.csv"
-    with open(individual_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "model", "benchmark", "seed", "batch_size", "warmup_epochs", "measured_epochs",
-            "total_samples", "elapsed_seconds", "samples_per_second", "time_per_iter_ms"
-        ])
-        for r in individual_results:
-            writer.writerow([
-                r.model, r.benchmark, r.seed, r.batch_size, r.warmup_epochs, r.measured_epochs,
-                r.total_samples, f"{r.elapsed_seconds:.3f}", f"{r.samples_per_second:.2f}",
-                f"{r.time_per_iter_ms:.4f}"
-            ])
-
-    # Save aggregated results
-    aggregated_path = output_dir / "timing_summary.csv"
-    with open(aggregated_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "model", "benchmark", "n_seeds", "batch_size",
-            "samples_per_sec_mean", "samples_per_sec_std",
-            "time_per_iter_ms_mean", "time_per_iter_ms_std"
-        ])
-        for r in aggregated_results:
-            writer.writerow([
-                r.model, r.benchmark, r.n_seeds, r.batch_size,
-                f"{r.samples_per_sec_mean:.2f}", f"{r.samples_per_sec_std:.2f}",
-                f"{r.time_per_iter_ms_mean:.4f}", f"{r.time_per_iter_ms_std:.4f}"
-            ])
-
-    # Save pivot table (model × benchmark)
+    # Save pivot table (benchmark × model) - models as columns
     pivot_path = output_dir / "timing_pivot.csv"
     benchmarks = sorted(set(r.benchmark for r in aggregated_results))
     models = sorted(set(r.model for r in aggregated_results))
@@ -558,20 +461,16 @@ def save_results(
 
     with open(pivot_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        header = ["model"] + [f"{b}_samples_per_sec" for b in benchmarks] + [f"{b}_time_per_iter_ms" for b in benchmarks]
+        # Header: benchmark, then all models
+        header = ["benchmark"] + models
         writer.writerow(header)
-        for model in models:
-            row = [model]
-            for bench in benchmarks:
+        # Each row is a benchmark with time_per_iter_ms for each model
+        for bench in benchmarks:
+            row = [bench]
+            for model in models:
                 r = lookup.get((model, bench))
                 if r:
-                    row.append(f"{r.samples_per_sec_mean:.1f} +/- {r.samples_per_sec_std:.1f}")
-                else:
-                    row.append("N/A")
-            for bench in benchmarks:
-                r = lookup.get((model, bench))
-                if r:
-                    row.append(f"{r.time_per_iter_ms_mean:.3f} +/- {r.time_per_iter_ms_std:.3f}")
+                    row.append(f"{r.time_per_iter_ms_mean:.3f} +/- {r.time_per_iter_ms_std:.6f}")
                 else:
                     row.append("N/A")
             writer.writerow(row)
@@ -585,13 +484,10 @@ def save_results(
             "measured_epochs": MEASURED_EPOCHS,
             "models": list(MODEL_VARIANTS.keys()),
             "benchmarks": list(BENCHMARKS.keys()),
-            "n_individual_results": len(individual_results),
             "n_aggregated_results": len(aggregated_results),
         }, f, indent=2)
 
     print(f"\nResults saved to: {output_dir}")
-    print(f"  - {individual_path.name}")
-    print(f"  - {aggregated_path.name}")
     print(f"  - {pivot_path.name}")
     print(f"  - {metadata_path.name}")
 
@@ -652,7 +548,7 @@ def main():
                     result = run_single_timing(model_name, benchmark, seed, device)
                     if result:
                         all_results.append(result)
-                        print(f"Done: {result.samples_per_second:.1f} samples/s, {result.time_per_iter_ms:.3f} ms/iter")
+                        print(f"Done: {result.time_per_iter_ms:.3f} ms/iter")
                     else:
                         print("Skipped (unsupported)")
                 except Exception as e:
@@ -668,26 +564,30 @@ def main():
     # Aggregate and save results
     if all_results:
         aggregated = aggregate_results(all_results)
-        save_results(all_results, aggregated, output_dir)
+        save_results(aggregated, output_dir)
 
         # Print summary table
-        print("\n" + "=" * 80)
-        print("SUMMARY (samples/second, mean +/- std)")
-        print("=" * 80)
-        print(f"{'Model':<25} {'darcy_1d':<25} {'elastic_2d':<25}")
-        print("-" * 80)
+        print("\n" + "=" * 100)
+        print("SUMMARY (time_per_iter_ms, mean +/- std)")
+        print("=" * 100)
+        # Header: models as columns
+        header = f"{'Benchmark':<15}"
+        for model in MODEL_VARIANTS:
+            header += f"{model:>12}"
+        print(header)
+        print("-" * 100)
 
         lookup = {(r.model, r.benchmark): r for r in aggregated}
-        for model in MODEL_VARIANTS:
-            row = f"{model:<25}"
-            for bench in BENCHMARKS:
+        for bench in BENCHMARKS:
+            row = f"{bench:<15}"
+            for model in MODEL_VARIANTS:
                 r = lookup.get((model, bench))
                 if r:
-                    row += f"{r.samples_per_sec_mean:>10.1f} +/- {r.samples_per_sec_std:<8.1f}"
+                    row += f"{r.time_per_iter_ms_mean:>12.3f}"
                 else:
-                    row += f"{'N/A':^25}"
+                    row += f"{'N/A':>12}"
             print(row)
-        print("=" * 80)
+        print("=" * 100)
 
 
 if __name__ == "__main__":

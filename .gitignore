@@ -180,6 +180,7 @@ Thumbs.db
 *.npy
 *.sh
 *.run
+*.pdf
 
 # Your specific log directory
 logs/

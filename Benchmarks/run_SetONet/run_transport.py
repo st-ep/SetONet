@@ -345,9 +345,14 @@ def main():
     print(f"Model parameters: {total_params:,}")
 
     # Load pre-trained model if specified
+    model_was_loaded = False
     if args.load_model_path:
-        print(f"Loading pre-trained model from: {args.load_model_path}")
-        model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+        if os.path.exists(args.load_model_path):
+            print(f"Loading pre-trained model from: {args.load_model_path}")
+            model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+            model_was_loaded = True
+        else:
+            print(f"Warning: Model path not found: {args.load_model_path}")
 
     # Setup TensorBoard callback
     callback = None
@@ -367,16 +372,18 @@ def main():
         print(f"TensorBoard logs: {tb_log_dir}")
         print(f"View with: tensorboard --logdir {tb_log_dir}")
 
-    # Train model
-    print(f"\nStarting training for {args.son_epochs} epochs...")
-    print(f"Training on {transport_dataset.n_source_points} sensors -> {transport_dataset.n_query_points} queries")
-
-    model.train_model(
-        dataset=transport_dataset,
-        epochs=args.son_epochs,
-        progress_bar=True,
-        callback=callback,
-    )
+    # Train model (skip if model was loaded)
+    if not model_was_loaded:
+        print(f"\nStarting training for {args.son_epochs} epochs...")
+        print(f"Training on {transport_dataset.n_source_points} sensors -> {transport_dataset.n_query_points} queries")
+        model.train_model(
+            dataset=transport_dataset,
+            epochs=args.son_epochs,
+            progress_bar=True,
+            callback=callback,
+        )
+    else:
+        print(f"\nSetONet model loaded. Skipping training.")
 
     # Evaluate model on ALL test samples (global L2)
     print("\nEvaluating model on test set...")
@@ -403,10 +410,11 @@ def main():
         plot_transport_q_overlay(model, dataset, transport_dataset, device, sample_idx=i,
                                   save_path=plot_save_path, dataset_split="test")
 
-    # Save model
-    model_save_path = os.path.join(log_dir, "transport_setonet_model.pth")
-    torch.save(model.state_dict(), model_save_path)
-    print(f"Model saved to: {model_save_path}")
+    # Save model (skip if model was loaded)
+    if not model_was_loaded:
+        model_save_path = os.path.join(log_dir, "transport_setonet_model.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved to: {model_save_path}")
 
     print("\nTraining completed!")
     print(f"Final Rel L2 Error: {test_results['rel_l2_transport_map']:.6f}")

@@ -28,7 +28,7 @@ MODEL_ORDER = ['setonet_quadrature', 'deeponet', 'vidon']
 
 # Model display names (for reference, not used in plots per user request)
 MODEL_DISPLAY_NAMES = {
-    'setonet_quadrature': 'SetONet (Quadrature)',
+    'setonet_quadrature': 'SetONet',
     'deeponet': 'DeepONet',
     'vidon': 'VIDON',
 }
