@@ -432,6 +432,9 @@ def _plot_elastic_row(axes, cb_axes, model, dataset, wrapper, idx, device, vmin,
         (axes[3], error, cb_axes[1], True)
     ]):
         Zi = griddata((x, y), vals, (Xi, Yi), method='cubic')
+        if np.isnan(Zi).any():
+            Zi_nearest = griddata((x, y), vals, (Xi, Yi), method='nearest')
+            Zi = np.where(np.isnan(Zi), Zi_nearest, Zi)
         Zi[_circular_mask(Xi, Yi)] = np.nan
         
         # Use shared error scale for error plots
@@ -445,8 +448,10 @@ def _plot_elastic_row(axes, cb_axes, model, dataset, wrapper, idx, device, vmin,
         scale = 10 ** -order
         Zi_scaled = Zi * scale
         v_scaled = (v[0] * scale, v[1] * scale)
+        if is_err:
+            Zi_scaled = np.clip(Zi_scaled, v_scaled[0], v_scaled[1])
         
-        cmap_name = 'Reds' if is_err else 'jet'
+        cmap_name = 'jet'
         
         # Only use explicit levels for error plots (for consistent colorbar)
         if is_err:

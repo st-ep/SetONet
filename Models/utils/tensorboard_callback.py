@@ -294,7 +294,33 @@ class TensorBoardCallback:
                 sample = test_data[i]
                 
                 # Check dataset format by keys present
-                if 'sources' in sample:
+                is_diffraction = False
+                if 'bumps' in sample:
+                    # Handle diffraction dataset format (Phase-Screen Diffraction)
+                    is_diffraction = True
+                    bumps = np.array(sample['bumps'])
+                    xs = torch.tensor(bumps[:, :2], dtype=torch.float32, device=self.device).unsqueeze(0)
+                    us = torch.tensor(bumps[:, 2:4], dtype=torch.float32, device=self.device).unsqueeze(0)
+
+                    if 'grid_coords' in sample and 'field_values' in sample:
+                        ys = torch.tensor(np.array(sample['grid_coords']), dtype=torch.float32, device=self.device).unsqueeze(0)
+                        target = torch.tensor(np.array(sample['field_values']), dtype=torch.float32, device=self.device).unsqueeze(0)
+                    elif 'field' in sample:
+                        field = np.array(sample['field'])
+                        if hasattr(self.dataset_wrapper, 'grid_coords'):
+                            ys = self.dataset_wrapper.grid_coords.unsqueeze(0)
+                        else:
+                            grid_size = field.shape[0]
+                            x = np.linspace(0.0, 1.0, grid_size, endpoint=False)
+                            y = x
+                            xx, yy = np.meshgrid(x, y, indexing='ij')
+                            grid_coords = np.stack([xx, yy], axis=-1)
+                            ys = torch.tensor(grid_coords.reshape(-1, 2), dtype=torch.float32, device=self.device).unsqueeze(0)
+                        target = torch.tensor(field.reshape(-1, 2), dtype=torch.float32, device=self.device).unsqueeze(0)
+                    else:
+                        raise ValueError(f"Unknown diffraction dataset format. Available keys: {list(sample.keys())}")
+
+                elif 'sources' in sample:
                     # Handle datasets with sources (Heat, Concentration, Transport, Chladni)
                     sources = np.array(sample['sources'])
                     
@@ -403,23 +429,39 @@ class TensorBoardCallback:
                 if self.eval_sensor_dropoff > 0.0:
                     from Data.data_utils import apply_sensor_dropoff
                     
-                    # Apply dropout to sensor data (remove batch dimension for dropout function)
-                    xs_dropped, us_dropped = apply_sensor_dropoff(
-                        xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
-                        us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
-                        self.eval_sensor_dropoff,
-                        self.replace_with_nearest
-                    )
-                    
-                    # Add batch dimension back
-                    xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
-                    us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
+                    if us.dim() == 3 and us.shape[-1] > 1:
+                        # Multi-feature sensors (e.g., diffraction bumps with [alpha, ell])
+                        xs_dropped, us_dropped = apply_sensor_dropoff(
+                            xs.squeeze(0),  # (n_sensors, coord_dim)
+                            us.squeeze(0).transpose(0, 1),  # (feat_dim, n_sensors)
+                            self.eval_sensor_dropoff,
+                            self.replace_with_nearest
+                        )
+                        xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, coord_dim)
+                        us_used = us_dropped.transpose(0, 1).unsqueeze(0)  # (1, n_remaining_sensors, feat_dim)
+                    else:
+                        # Apply dropout to sensor data (remove batch dimension for dropout function)
+                        xs_dropped, us_dropped = apply_sensor_dropoff(
+                            xs.squeeze(0),  # Remove batch dimension: (n_sensors, 2)
+                            us.squeeze(0).squeeze(-1),  # Remove batch and feature dimensions: (n_sensors,)
+                            self.eval_sensor_dropoff,
+                            self.replace_with_nearest
+                        )
+                        
+                        # Add batch dimension back
+                        xs_used = xs_dropped.unsqueeze(0)  # (1, n_remaining_sensors, 2)
+                        us_used = us_dropped.unsqueeze(0).unsqueeze(-1)  # (1, n_remaining_sensors, 1)
                 
                 # Forward pass
                 pred_norm = model(xs_used, us_used, ys)
                 
                 # Calculate relative error
-                rel_error = calculate_l2_relative_error(pred_norm, target)
+                if is_diffraction:
+                    pred_flat = pred_norm.reshape(pred_norm.shape[0], -1)
+                    target_flat = target.reshape(target.shape[0], -1)
+                    rel_error = calculate_l2_relative_error(pred_flat, target_flat)
+                else:
+                    rel_error = calculate_l2_relative_error(pred_norm, target)
                 total_rel_error += rel_error.item()
                 # Calculate MSE loss
                 mse_loss = F.mse_loss(pred_norm, target)
