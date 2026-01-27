@@ -46,6 +46,49 @@ def infer_output_dim(state_dict: dict, model_type: str) -> int:
     return int(state_dict.get('bias', torch.tensor([0])).shape[0]) or 1
 
 
+def infer_vidon_output_size_src(state_dict: dict) -> int | None:
+    """Infer VIDON output_size_src (du) from checkpoint."""
+    key = "value_encoder.net.0.weight"
+    if key in state_dict:
+        return int(state_dict[key].shape[1])
+    return None
+
+
+def infer_setonet_output_size_src(state_dict: dict, arch: dict) -> int | None:
+    """Infer output_size_src (du) for SetONet from checkpoint weights."""
+    use_pe = arch.get("use_positional_encoding", True)
+    pe_type = arch.get("pos_encoding_type", "sinusoidal")
+    if pe_type == "skip":
+        use_pe = False
+    dx_enc = arch.get("pos_encoding_dim", 0) if use_pe else arch.get("input_size_src", 2)
+
+    # Prefer heads with explicit (x,u) value nets
+    value_keys = [
+        "quadrature_head.value_net.0.weight",
+        "adaptive_quadrature_head.value_net.0.weight",
+        "galerkin_head.value_net.0.weight",
+        "pg_head.value_net.0.weight",
+    ]
+    for key in value_keys:
+        if key in state_dict:
+            in_features = int(state_dict[key].shape[1])
+            du = in_features - int(dx_enc)
+            if du > 0:
+                return du
+
+    # Fallback: standard phi network (concatenated [x, u] or [pe(x), u])
+    if "phi.0.weight" in state_dict:
+        in_features = int(state_dict["phi.0.weight"].shape[1])
+        if use_pe:
+            du = in_features - int(dx_enc)
+        else:
+            du = in_features - int(arch.get("input_size_src", 2))
+        if du > 0:
+            return du
+
+    return None
+
+
 # =============================================================================
 # Model Creation
 # =============================================================================
@@ -151,6 +194,13 @@ def load_model(benchmark: str, model_name: str, seed: int, logs_dir: Path, devic
     arch["output_size_tgt"] = infer_output_dim(state_dict, mtype)
     if mtype == "vidon":
         arch["vidon_p_dim"] = infer_vidon_dims(state_dict)[0]
+        du = infer_vidon_output_size_src(state_dict)
+        if du is not None:
+            arch["output_size_src"] = du
+    elif mtype == "setonet":
+        du = infer_setonet_output_size_src(state_dict, arch)
+        if du is not None:
+            arch["output_size_src"] = du
     
     # Create and load model
     if mtype == "setonet":
@@ -187,6 +237,10 @@ def load_dataset(benchmark: str, device: str):
     elif plot_type == 'concentration':
         from Data.concentration_data.concentration_2d_dataset import load_concentration_dataset
         return load_concentration_dataset(data_path, batch_size=1, device=device)
+    
+    elif plot_type == 'diffraction':
+        from Data.diffraction_2d_data.diffraction_2d_dataset import load_diffraction_dataset
+        return load_diffraction_dataset(data_path, batch_size=1, device=device)
     
     elif plot_type == 'transport_q':
         from Data.transport_q_data.transport_dataset import load_transport_dataset

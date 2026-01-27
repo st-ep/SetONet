@@ -37,7 +37,7 @@ models:
   - setonet_mean
 #  - setonet_petrov
 #  - setonet_galerkin
-#  - setonet_quadrature
+  - setonet_quadrature
 #  - setonet_adaptive
 
 # -----------------------------------------------------------------------------
@@ -62,8 +62,9 @@ models:
 benchmarks:
 #  - heat_2d_P30
 #  - heat_2d_P10
+  - diffraction_2d
 #  - elastic_2d
-  - elastic_2d_robust_train
+#  - elastic_2d_robust_train
 #  - elastic_2d_robust_eval
 #  - darcy_1d
 #  - darcy_1d_robust_train

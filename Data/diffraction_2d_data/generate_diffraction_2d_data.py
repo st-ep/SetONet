@@ -198,16 +198,16 @@ def main() -> None:
     parser.add_argument("--grid", type=int, default=128, help="Grid resolution (N×N), on [0,1) with endpoint=False")
 
     # bump distribution
-    parser.add_argument("--n_min", type=int, default=30, help="Min # phase bumps")
-    parser.add_argument("--n_max", type=int, default=30, help="Max # phase bumps")
-    parser.add_argument("--alpha_low", type=float, default=-np.pi, help="Lower bound of alpha (radians)")
-    parser.add_argument("--alpha_high", type=float, default=np.pi, help="Upper bound of alpha (radians)")
-    parser.add_argument("--ell_low", type=float, default=0.02, help="Lower bound of ell (log-uniform)")
-    parser.add_argument("--ell_high", type=float, default=0.07, help="Upper bound of ell (log-uniform)")
+    parser.add_argument("--n_min", type=int, default=10, help="Min # phase bumps")
+    parser.add_argument("--n_max", type=int, default=10, help="Max # phase bumps")
+    parser.add_argument("--alpha_low", type=float, default=-np.pi/2, help="Lower bound of alpha (radians)")
+    parser.add_argument("--alpha_high", type=float, default=np.pi/2, help="Upper bound of alpha (radians)")
+    parser.add_argument("--ell_low", type=float, default=0.4, help="Lower bound of ell (log-uniform)")
+    parser.add_argument("--ell_high", type=float, default=0.4, help="Upper bound of ell (log-uniform)")
 
     # physics constants
-    parser.add_argument("--sigma_env", type=float, default=0.18, help="Envelope width sigma_env")
-    parser.add_argument("--t0", type=float, default=0.15, help="Fixed time t0 for propagation")
+    parser.add_argument("--sigma_env", type=float, default=0.2, help="Envelope width sigma_env")
+    parser.add_argument("--t0", type=float, default=0.1, help="Fixed time t0 for propagation")
     parser.add_argument("--k_x", type=float, default=0.0, help="Carrier wave k_x (radians per unit length)")
     parser.add_argument("--k_y", type=float, default=0.0, help="Carrier wave k_y (radians per unit length)")
 

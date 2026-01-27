@@ -66,6 +66,13 @@ BENCHMARKS = {
         'data_path': 'Data/concentration_data/chem_plume_adaptive_dataset4.0_n4096_N25_P30',
         'available_models': ['setonet_quadrature', 'vidon'],
     },
+    'diffraction_2d': {
+        'n_cols': 4,
+        'row_height': 2.2,
+        'plot_type': 'diffraction',
+        'data_path': 'Data/diffraction_data/phase_screen_dataset',
+        'available_models': ['setonet_quadrature', 'vidon'],
+    },
     'transport': {
         'n_cols': 4,
         'row_height': 2.0,
@@ -93,6 +100,10 @@ CHECKPOINT_PATTERNS = {
     'concentration_2d': {
         'setonet_quadrature': 'concentration2d_setonet_model.pth',
         'vidon': 'concentration2d_vidon_model.pth',
+    },
+    'diffraction_2d': {
+        'setonet_quadrature': 'diffraction2d_setonet_model.pth',
+        'vidon': 'diffraction2d_vidon_model.pth',
     },
     'transport': {
         'setonet_quadrature': 'transport_setonet_model.pth',

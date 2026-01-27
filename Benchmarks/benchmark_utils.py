@@ -19,6 +19,7 @@ import yaml
 SETONET_SCRIPTS = {
     "heat_2d_P30": "run_heat_2d.py", "heat_2d_P10": "run_heat_2d.py",
     "concentration_2d": "run_consantration_2d.py", "transport": "run_transport.py",
+    "diffraction_2d": "run_diffraction_2d.py",
     "elastic_2d": "run_elastic_2d.py", "elastic_2d_robust_train": "run_elastic_2d.py", "elastic_2d_robust_eval": "run_elastic_2d.py",
     "darcy_1d": "run_darcy_1d.py", "darcy_1d_robust_train": "run_darcy_1d.py", "darcy_1d_robust_eval": "run_darcy_1d.py",
     "burgers_1d": "run_burgers_1d.py", "burgers_1d_robust_train": "run_burgers_1d.py", "burgers_1d_robust_eval": "run_burgers_1d.py",
@@ -35,6 +36,7 @@ DEEPONET_SCRIPTS = {
 VIDON_SCRIPTS = {
     "heat_2d_P30": "run_heat_2d_vidon.py", "heat_2d_P10": "run_heat_2d_vidon.py",
     "concentration_2d": "run_consantration_2d_vidon.py", "transport": "run_transport_vidon.py",
+    "diffraction_2d": "run_diffraction_2d_vidon.py",
     "elastic_2d": "run_elastic_2d_vidon.py", "elastic_2d_robust_train": "run_elastic_2d_vidon.py", "elastic_2d_robust_eval": "run_elastic_2d_vidon.py",
     "darcy_1d": "run_darcy_1d_vidon.py", "darcy_1d_robust_train": "run_darcy_1d_vidon.py", "darcy_1d_robust_eval": "run_darcy_1d_vidon.py",
     "burgers_1d": "run_burgers_1d_vidon.py", "burgers_1d_robust_train": "run_burgers_1d_vidon.py", "burgers_1d_robust_eval": "run_burgers_1d_vidon.py",
@@ -49,7 +51,7 @@ BENCHMARK_CONFIG_MAP = {
         "1d_derivative": "setonet_1d.yaml", "1d_derivative_varsens": "setonet_1d.yaml", "1d_derivative_robust": "setonet_1d.yaml",
         "darcy_1d": "setonet_1d.yaml", "darcy_1d_robust_train": "setonet_1d.yaml", "darcy_1d_robust_eval": "setonet_1d.yaml",
         "burgers_1d": "setonet_1d.yaml", "burgers_1d_robust_train": "setonet_1d.yaml", "burgers_1d_robust_eval": "setonet_1d.yaml",
-        "heat_2d_P30": "setonet_heat2d.yaml", "heat_2d_P10": "setonet_heat2d.yaml",
+        "heat_2d_P30": "setonet_heat2d.yaml", "heat_2d_P10": "setonet_heat2d.yaml", "diffraction_2d": "setonet_heat2d.yaml",
         "concentration_2d": "setonet_heat2d.yaml", "transport": "setonet_heat2d.yaml",
         "elastic_2d": "setonet_elastic2d.yaml", "elastic_2d_robust_train": "setonet_elastic2d.yaml", "elastic_2d_robust_eval": "setonet_elastic2d.yaml",
     },
@@ -65,7 +67,7 @@ BENCHMARK_CONFIG_MAP = {
         "1d_derivative": "vidon_1d.yaml", "1d_derivative_varsens": "vidon_1d.yaml", "1d_derivative_robust": "vidon_1d.yaml",
         "darcy_1d": "vidon_1d.yaml", "darcy_1d_robust_train": "vidon_1d.yaml", "darcy_1d_robust_eval": "vidon_1d.yaml",
         "burgers_1d": "vidon_1d.yaml", "burgers_1d_robust_train": "vidon_1d.yaml", "burgers_1d_robust_eval": "vidon_1d.yaml",
-        "heat_2d_P30": "vidon_heat2d.yaml", "heat_2d_P10": "vidon_heat2d.yaml",
+        "heat_2d_P30": "vidon_heat2d.yaml", "heat_2d_P10": "vidon_heat2d.yaml", "diffraction_2d": "vidon_heat2d.yaml",
         "concentration_2d": "vidon_heat2d.yaml", "transport": "vidon_heat2d.yaml",
         "elastic_2d": "vidon_elastic2d.yaml", "elastic_2d_robust_train": "vidon_elastic2d.yaml", "elastic_2d_robust_eval": "vidon_elastic2d.yaml",
     },
@@ -116,7 +118,8 @@ BENCHMARK_DIMS = {
     "1d_derivative": (1, 1, 1, 1), "1d_derivative_varsens": (1, 1, 1, 1), "1d_derivative_robust": (1, 1, 1, 1),
     "darcy_1d": (1, 1, 1, 1), "darcy_1d_robust_train": (1, 1, 1, 1), "darcy_1d_robust_eval": (1, 1, 1, 1),
     "burgers_1d": (1, 1, 1, 1), "burgers_1d_robust_train": (1, 1, 1, 1), "burgers_1d_robust_eval": (1, 1, 1, 1),
-    "heat_2d_P30": (2, 1, 2, 1), "heat_2d_P10": (2, 1, 2, 1), "concentration_2d": (2, 1, 2, 1), "transport": (2, 1, 2, 2),
+    "heat_2d_P30": (2, 1, 2, 1), "heat_2d_P10": (2, 1, 2, 1), "diffraction_2d": (2, 2, 2, 2),
+    "concentration_2d": (2, 1, 2, 1), "transport": (2, 1, 2, 2),
     "elastic_2d": (2, 1, 2, 1), "elastic_2d_robust_train": (2, 1, 2, 1), "elastic_2d_robust_eval": (2, 1, 2, 1),
 }
 

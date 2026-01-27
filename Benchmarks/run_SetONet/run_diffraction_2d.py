@@ -15,6 +15,7 @@ if project_root not in sys.path:
 from Models.SetONet import SetONet
 import torch.nn as nn
 from Models.utils.helper_utils import calculate_l2_relative_error
+from Models.utils.config_utils import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.diffraction_2d_data.diffraction_2d_dataset import load_diffraction_dataset
 from Plotting.plot_diffraction_2d_utils import plot_diffraction_results
@@ -324,6 +325,13 @@ def main():
     print("\nEvaluating model...")
     avg_loss, avg_rel_error = evaluate_model(model, dataset, diffraction_dataset, device, n_test_samples=100)
 
+    # Prepare test results for configuration saving
+    test_results = {
+        "relative_l2_error": avg_rel_error,
+        "mse_loss": avg_loss,
+        "n_test_samples": 100,
+    }
+
     # Plot results
     print("Generating plots...")
     # Plot 3 test samples
@@ -351,6 +359,18 @@ def main():
             save_path=plot_save_path,
             dataset_split="train",
         )
+
+    # Save experiment configuration with test results
+    save_experiment_configuration(
+        args,
+        model,
+        dataset,
+        diffraction_dataset,
+        device,
+        log_dir,
+        dataset_type="diffraction_2d",
+        test_results=test_results,
+    )
 
     # Save model (skip if model was loaded)
     if not model_was_loaded:

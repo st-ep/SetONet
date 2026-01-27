@@ -17,8 +17,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.gridspec import GridSpec
-from matplotlib.patches import FancyArrowPatch
-from matplotlib.ticker import MultipleLocator
+from matplotlib.patches import FancyArrowPatch, Circle
+from matplotlib.ticker import MultipleLocator, FormatStrFormatter
 from scipy.interpolate import griddata
 from scipy.spatial import cKDTree
 
@@ -51,6 +51,38 @@ def _add_wind_arrow(ax, wind_angle=0.0):
 
 def _circular_mask(X, Y, cx=0.5, cy=0.5, r=0.25):
     return (X - cx)**2 + (Y - cy)**2 <= r**2
+
+
+def _phase_screen_from_bumps(bumps: np.ndarray, X: np.ndarray, Y: np.ndarray, chunk_size: int = 128) -> np.ndarray:
+    """Compute wrapped phase screen from Gaussian bumps (matches plot_diffraction_2d_utils)."""
+    if bumps.size == 0:
+        return np.zeros_like(X, dtype=np.float64)
+
+    bx = bumps[:, 0].astype(np.float64)
+    by = bumps[:, 1].astype(np.float64)
+    alpha = bumps[:, 2].astype(np.float64)
+    ell = bumps[:, 3].astype(np.float64)
+
+    phi = np.zeros_like(X, dtype=np.float64)
+    X64 = X.astype(np.float64, copy=False)
+    Y64 = Y.astype(np.float64, copy=False)
+
+    n_bumps = bx.shape[0]
+    for s in range(0, n_bumps, chunk_size):
+        e = min(s + chunk_size, n_bumps)
+        bxs = bx[s:e][None, None, :]
+        bys = by[s:e][None, None, :]
+        alphas = alpha[s:e][None, None, :]
+        ells = ell[s:e][None, None, :]
+
+        dx = np.mod(X64[:, :, None] - bxs + 0.5, 1.0) - 0.5
+        dy = np.mod(Y64[:, :, None] - bys + 0.5, 1.0) - 0.5
+        r2 = dx * dx + dy * dy
+        denom = 2.0 * (ells * ells) + 1e-18
+        phi += np.sum(alphas * np.exp(-r2 / denom), axis=-1)
+
+    phi_mod = (phi + np.pi) % (2.0 * np.pi) - np.pi
+    return phi_mod
 
 
 # =============================================================================
@@ -212,7 +244,7 @@ def _plot_heat_conc_row(axes, cb_axes, model, dataset, wrapper, idx, device, vmi
     im_gt = axes[1].contourf(X, Y, field_gt, levels=100, cmap=cmap, vmin=vmin, vmax=vmax)
     im_list.append(im_gt)
     if cb_axes[0] is not None:
-        cbar = plt.colorbar(im_gt, cax=cb_axes[0], format='%.2f')
+        cbar = plt.colorbar(im_gt, cax=cb_axes[0], format='%.1f')
         cbar.set_label(label, rotation=270, labelpad=20, fontsize=16)
         cbar.ax.tick_params(labelsize=16)
         
@@ -356,6 +388,334 @@ def generate_heat_conc_stacked(benchmark, sample_idx, models, dataset, wrapper, 
     for fmt in OUTPUT_FORMATS:
         fig.savefig(output_dir / f"{base}.{fmt}", format=fmt, 
                    dpi=PNG_DPI if fmt == 'png' else None, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved {base}")
+
+
+# =============================================================================
+# Diffraction Plotting
+# =============================================================================
+
+def _plot_diffraction_row(
+    axes,
+    cb_axes,
+    bumps,
+    X,
+    Y,
+    phi_mod,
+    pred_field,
+    gt_field,
+    component: str,
+    vlim: float,
+    err_vmax: float,
+):
+    """Plot one diffraction row: Input | Pred | GT | Error."""
+    if component not in ("re", "im"):
+        raise ValueError(f"component must be 're' or 'im', got {component}")
+
+    comp_idx = 0 if component == "re" else 1
+    cmap_field = "RdBu_r"
+    cmap_err = "Reds"
+
+    # Input phase screen
+    ax = axes[0]
+    phi_plot = phi_mod.T
+    xt = X.T
+    yt = Y.T
+    im_in = ax.imshow(
+        phi_plot,
+        origin="lower",
+        extent=(0, 1, 0, 1),
+        cmap="twilight",
+        vmin=-np.pi,
+        vmax=np.pi,
+    )
+    ax.contour(xt, yt, phi_plot, levels=12, colors="black", linewidths=0.3, alpha=0.35)
+    for x0, y0, _, ell in bumps:
+        ax.add_patch(
+            Circle(
+                (float(x0), float(y0)),
+                float(ell),
+                edgecolor="white",
+                facecolor="none",
+                linewidth=0.4,
+                alpha=0.45,
+            )
+        )
+    ax.scatter(
+        bumps[:, 0],
+        bumps[:, 1],
+        s=66,
+        c="white",
+        edgecolors="black",
+        linewidths=0.3,
+        alpha=0.9,
+    )
+
+    # No colorbar for input to match other benchmarks and avoid overlap
+
+    # Prediction
+    pred = pred_field[:, :, comp_idx]
+    ax = axes[1]
+    im_pred = ax.imshow(
+        pred.T,
+        origin="lower",
+        extent=(0, 1, 0, 1),
+        cmap=cmap_field,
+        vmin=-vlim,
+        vmax=vlim,
+    )
+
+    # Ground truth
+    gt = gt_field[:, :, comp_idx]
+    ax = axes[2]
+    im_gt = ax.imshow(
+        gt.T,
+        origin="lower",
+        extent=(0, 1, 0, 1),
+        cmap=cmap_field,
+        vmin=-vlim,
+        vmax=vlim,
+    )
+    if cb_axes[0] is not None:
+        cbar = plt.colorbar(im_gt, cax=cb_axes[0])
+        label = "Re(u)" if component == "re" else "Im(u)"
+        cbar.set_label(label, rotation=270, labelpad=20, fontsize=16)
+        cbar.ax.tick_params(labelsize=16)
+        cbar.ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+        cbar.update_ticks()
+
+    # Error
+    err = np.abs(gt - pred)
+    ax = axes[3]
+    im_err = ax.imshow(
+        err.T,
+        origin="lower",
+        extent=(0, 1, 0, 1),
+        cmap=cmap_err,
+        vmin=0.0,
+        vmax=err_vmax,
+    )
+    if cb_axes[1] is not None:
+        cbar = plt.colorbar(im_err, cax=cb_axes[1], format='%.2f')
+        cbar.set_label("|Error|", rotation=270, labelpad=20, fontsize=16)
+        cbar.ax.tick_params(labelsize=16)
+        tick_values = np.linspace(0, err_vmax, 6)
+        cbar.set_ticks(tick_values)
+
+    # Common styling
+    ticks_01 = np.linspace(0.0, 1.0, 6)
+    for ax in axes:
+        ax.set_xlabel("x", fontsize=16)
+        ax.set_ylabel("y", fontsize=16)
+        ax.tick_params(axis="both", labelsize=16)
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_xticks(ticks_01)
+        ax.set_yticks(ticks_01)
+        ax.xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+        ax.set_aspect("equal", adjustable="box")
+
+
+def generate_diffraction_stacked(benchmark, sample_idx, models, dataset, wrapper, device, output_dir):
+    """Generate stacked diffraction figure with 4 rows (SetONet/VIDON × Re/Im)."""
+    setonet = models.get("setonet_quadrature")
+    vidon = models.get("vidon")
+    if setonet is None or vidon is None:
+        print("  Warning: Diffraction requires both SetONet and VIDON models.")
+        return
+
+    sample = dataset["test"][sample_idx]
+    bumps = np.array(sample["bumps"])
+    field = np.array(sample["field"])
+    grid_n = field.shape[0]
+
+    x = np.linspace(0.0, 1.0, grid_n, endpoint=False)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    viz_coords = np.column_stack([X.reshape(-1), Y.reshape(-1)])
+
+    re_gt = field[:, :, 0]
+    im_gt = field[:, :, 1]
+    phi_mod = _phase_screen_from_bumps(bumps, X, Y)
+
+    # Predictions
+    preds = {}
+    with torch.no_grad():
+        bump_coords = torch.tensor(bumps[:, :2], device=device, dtype=torch.float32).unsqueeze(0)
+        bump_feats = torch.tensor(bumps[:, 2:4], device=device, dtype=torch.float32).unsqueeze(0)
+        target_coords = torch.tensor(viz_coords, device=device, dtype=torch.float32).unsqueeze(0)
+
+        pred_set = setonet(bump_coords, bump_feats, target_coords)
+        preds["setonet_quadrature"] = pred_set.squeeze(0).cpu().numpy().reshape(grid_n, grid_n, 2)
+
+        pred_vid = vidon(bump_coords, bump_feats, target_coords)
+        preds["vidon"] = pred_vid.squeeze(0).cpu().numpy().reshape(grid_n, grid_n, 2)
+
+    # Shared scales across models (per component)
+    vlim_re = max(
+        np.max(np.abs(re_gt)),
+        np.max(np.abs(preds["setonet_quadrature"][:, :, 0])),
+        np.max(np.abs(preds["vidon"][:, :, 0])),
+        1e-8,
+    )
+    vlim_im = max(
+        np.max(np.abs(im_gt)),
+        np.max(np.abs(preds["setonet_quadrature"][:, :, 1])),
+        np.max(np.abs(preds["vidon"][:, :, 1])),
+        1e-8,
+    )
+
+    err_re_set = np.abs(re_gt - preds["setonet_quadrature"][:, :, 0])
+    err_re_vid = np.abs(re_gt - preds["vidon"][:, :, 0])
+    err_im_set = np.abs(im_gt - preds["setonet_quadrature"][:, :, 1])
+    err_im_vid = np.abs(im_gt - preds["vidon"][:, :, 1])
+
+    err_vmax_re = max(float(err_re_set.max()), float(err_re_vid.max()), 1e-8)
+    err_vmax_im = max(float(err_im_set.max()), float(err_im_vid.max()), 1e-8)
+
+    # Layout configuration (consistent with heat/concentration styling)
+    plot_ratios = [1, 1, 1, 1]
+    has_colorbar = [False, False, True, True]
+    cb_ratio = 0.07
+    # Reduce plot widths and use absolute spacer ratios to free horizontal space.
+    plot_ratios = [0.8, 0.8, 0.8, 0.8]
+    # Absolute spacer ratios (not scaled by plot width)
+    wspaces = [0.35, 0.35, 0.6]
+    spacer_widths = wspaces
+
+    full_ratios = []
+    col_starts = []
+    cb_cols = []
+    current_col = 0
+    for i in range(len(plot_ratios)):
+        if i > 0:
+            full_ratios.append(spacer_widths[i - 1])
+            current_col += 1
+        full_ratios.append(plot_ratios[i])
+        col_starts.append(current_col)
+        current_col += 1
+        if has_colorbar[i]:
+            full_ratios.append(cb_ratio)
+            cb_cols.append(current_col)
+            current_col += 1
+
+    n_rows = 4
+    # Custom inter-row spacing: smaller gaps between (1,2) and (3,4), slightly larger between (2,3).
+    gap12 = 0.02
+    gap23 = 0.2
+    gap34 = 0.02
+    row_heights = [1, gap12, 1, gap23, 1, gap34, 1]
+    row_map = [0, 2, 4, 6]
+
+    fig = plt.figure(figsize=(19.5, 4.8 * n_rows))
+    gs = fig.add_gridspec(
+        len(row_heights),
+        len(full_ratios),
+        width_ratios=full_ratios,
+        height_ratios=row_heights,
+        wspace=0,
+        hspace=0,
+    )
+
+    row_axes = []
+    bottom_axes = None
+    cb_layout_refs = []
+
+    row_specs = [
+        ("setonet_quadrature", "re", vlim_re, err_vmax_re),
+        ("setonet_quadrature", "im", vlim_im, err_vmax_im),
+        ("vidon", "re", vlim_re, err_vmax_re),
+        ("vidon", "im", vlim_im, err_vmax_im),
+    ]
+
+    for row, (model_key, component, vlim, err_vmax) in enumerate(row_specs):
+        gs_row = row_map[row]
+        axes = [fig.add_subplot(gs[gs_row, col_starts[j]]) for j in range(len(plot_ratios))]
+        row_axes.append((row, axes[0]))
+        if row == n_rows - 1:
+            bottom_axes = axes
+
+        cb_axes = [None] * len(plot_ratios)
+        cb_idx = 0
+        for i in range(len(plot_ratios)):
+            if has_colorbar[i]:
+                cb_axes[i] = fig.add_subplot(gs[gs_row, cb_cols[cb_idx]])
+                cb_idx += 1
+
+        active_cb_axes = [cb_axes[2], cb_axes[3]]
+        _plot_diffraction_row(
+            axes,
+            active_cb_axes,
+            bumps,
+            X,
+            Y,
+            phi_mod,
+            preds[model_key],
+            field,
+            component,
+            vlim,
+            err_vmax,
+        )
+
+        cb_layout_refs.append((axes[2], cb_axes[2], axes[3], cb_axes[3]))
+
+    fig.subplots_adjust(left=0.03, right=0.97, top=0.95, bottom=0.06)
+
+    # Align colorbar heights to their corresponding axes and add horizontal padding.
+    gap_cb = 0.015
+    for ax_gt, cb_gt, ax_err, cb_err in cb_layout_refs:
+        if ax_gt is not None and cb_gt is not None:
+            pos = ax_gt.get_position()
+            cb_width = pos.width * (cb_ratio / plot_ratios[2])
+            cb_gt.set_position([pos.x1 + gap_cb, pos.y0, cb_width, pos.height])
+        if ax_err is not None and cb_err is not None:
+            pos = ax_err.get_position()
+            cb_width = pos.width * (cb_ratio / plot_ratios[3])
+            cb_err.set_position([pos.x1 + gap_cb, pos.y0, cb_width, pos.height])
+
+    # Subtitles for model blocks (above first row of each model)
+    title_rows = {0: "setonet_quadrature", 2: "vidon"}
+    for row_idx, ax in row_axes:
+        if row_idx in title_rows:
+            display_name = MODEL_DISPLAY_NAMES.get(title_rows[row_idx], title_rows[row_idx])
+            pos = ax.get_position()
+            fig.text(
+                0.5,
+                pos.y1 + 0.03,
+                display_name,
+                fontsize=22,
+                fontweight="bold",
+                ha="center",
+                va="bottom",
+                transform=fig.transFigure,
+            )
+
+    # Column labels under bottom row
+    if bottom_axes is not None:
+        col_labels = ["(Input)", "(Prediction)", "(Ground truth)", "(Error)"]
+        label_y = min(ax.get_position().y0 for ax in bottom_axes) - 0.04
+        label_y = max(label_y, 0.01)
+        for ax, label in zip(bottom_axes, col_labels):
+            pos = ax.get_position()
+            fig.text(
+                (pos.x0 + pos.x1) / 2,
+                label_y,
+                label,
+                ha="center",
+                va="top",
+                fontsize=18,
+                fontweight="bold",
+            )
+
+    base = f"fig_{benchmark}_sample_{sample_idx}"
+    for fmt in OUTPUT_FORMATS:
+        fig.savefig(
+            output_dir / f"{base}.{fmt}",
+            format=fmt,
+            dpi=PNG_DPI if fmt == "png" else None,
+            bbox_inches="tight",
+        )
     plt.close(fig)
     print(f"  Saved {base}")
 
@@ -853,6 +1213,8 @@ def main():
                                           bench_out, 'plasma', 'Concentration')
             elif plot_type == 'elastic':
                 generate_elastic_stacked(benchmark, i, models, dataset, wrapper, device, bench_out)
+            elif plot_type == 'diffraction':
+                generate_diffraction_stacked(benchmark, i, models, dataset, wrapper, device, bench_out)
             elif plot_type == 'transport_q':
                 generate_transport_stacked(benchmark, i, models, dataset, wrapper, device, bench_out)
         

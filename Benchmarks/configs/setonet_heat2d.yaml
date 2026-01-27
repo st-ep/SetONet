@@ -1,4 +1,4 @@
-# SetONet configuration for 2D heat-like benchmarks: heat_2d, concentration_2d, transport
+# SetONet configuration for 2D heat-like benchmarks: heat_2d, concentration_2d, transport, diffraction_2d
 # These benchmarks share the same hyperparameters
 
 # Model architecture
@@ -45,4 +45,3 @@ adaptive_mesh: false
 enable_tensorboard: true
 tb_eval_frequency: 1000
 tb_test_samples: 100
-

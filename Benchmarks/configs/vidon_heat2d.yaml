@@ -1,4 +1,4 @@
-# VIDON configuration for 2D benchmarks: heat_2d, concentration_2d, transport
+# VIDON configuration for 2D benchmarks: heat_2d, concentration_2d, transport, diffraction_2d
 # These benchmarks share the same hyperparameters
 
 # Model architecture
@@ -36,4 +36,3 @@ lr_schedule_gammas: [0.2, 0.5, 0.2, 0.5, 0.2, 0.5]
 enable_tensorboard: true
 tb_eval_frequency: 1000
 tb_test_samples: 100
-
