@@ -41,11 +41,15 @@ class SetONet(torch.nn.Module):
                  galerkin_dv: int = None,  # Galerkin PoU value dim (default = phi_output_size)
                  galerkin_normalize: str = "total",  # Galerkin normalization: "none" | "total" | "token"
                  galerkin_learn_temperature: bool = False,  # Learn temperature parameter for Galerkin PoU softmax
-	                 quad_dk: int = None,  # Quadrature head key/query dim (default = phi_output_size)
-	                 quad_dv: int = None,  # Quadrature head value dim (default = phi_output_size)
-	                 quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
-	                 quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
-	                 adapt_quad_rank: int = 4,  # Low-rank adaptation rank R for adaptive_quadrature
+                 quad_dk: int = None,  # Quadrature head key/query dim (default = phi_output_size)
+                 quad_dv: int = None,  # Quadrature head value dim (default = phi_output_size)
+                 quad_key_hidden: int | None = None,  # Quadrature key MLP hidden width (default = rho_hidden_size)
+                 quad_key_layers: int = 3,  # Quadrature key MLP depth (>=2)
+	                 quad_phi_activation: str = "tanh",  # Quadrature Phi activation: "tanh" | "softsign" | "softplus"
+                 quad_value_mode: str = "linear_u",  # Quadrature value net: "linear_u" | "mlp_u" | "mlp_xu"
+                 quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
+                 quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
+                 adapt_quad_rank: int = 4,  # Low-rank adaptation rank R for adaptive_quadrature
 	                 adapt_quad_hidden: int | None = 64,  # Hidden dim for the adapter MLP (None -> infer)
 	                 adapt_quad_scale: float = 0.1,  # Tanh-bounded adapter scale
 	                 adapt_quad_use_value_context: bool = True,  # Only value-based context supported
@@ -236,10 +240,18 @@ class SetONet(torch.nn.Module):
                 dv=dv,
                 hidden=self.rho_hidden_size,
                 activation_fn=activation_fn,
+                key_hidden=quad_key_hidden,
+                key_layers=quad_key_layers,
+                phi_activation=quad_phi_activation,
+                value_mode=quad_value_mode,
                 normalize=quad_normalize,
                 learn_temperature=quad_learn_temperature,
             )
         # --- End Quadrature head ---
+
+
+
+
 
         # --- Input-adaptive quadrature head (context-conditioned test functions) ---
         self.adaptive_quadrature_head = None

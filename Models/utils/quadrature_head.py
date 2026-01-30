@@ -33,6 +33,10 @@ class QuadratureHead(nn.Module):
         dv: int,
         hidden: int,
         activation_fn,
+        key_hidden: int | None = None,
+        key_layers: int = 3,
+        phi_activation: str = "tanh",
+        value_mode: str = "linear_u",
         eps: float = 1e-8,
         normalize: str = "total",
         learn_temperature: bool = False,
@@ -46,27 +50,55 @@ class QuadratureHead(nn.Module):
         self.eps = float(eps)
         self.normalize = normalize.lower()
         self.learn_temperature = bool(learn_temperature)
+        self.phi_activation = phi_activation.lower()
+        self.value_mode = value_mode.lower()
 
         if self.normalize not in ["none", "total", "token"]:
             raise ValueError(f"normalize must be 'none', 'total', or 'token', got {normalize}")
+        if self.phi_activation not in ["tanh", "softsign", "softplus"]:
+            raise ValueError(
+                f"phi_activation must be 'tanh', 'softsign', or 'softplus', got {phi_activation}"
+            )
+        if self.value_mode not in ["linear_u", "mlp_u", "mlp_xu"]:
+            raise ValueError(
+                f"value_mode must be 'linear_u', 'mlp_u', or 'mlp_xu', got {value_mode}"
+            )
 
         # Position-only key network: defines test/basis dependence on x
-        self.key_net = nn.Sequential(
-            nn.Linear(dx_enc, hidden),
-            activation_fn(),
-            nn.Linear(hidden, hidden),
-            activation_fn(),
-            nn.Linear(hidden, dk),
-        )
+        key_hidden_dim = int(hidden if key_hidden is None else key_hidden)
+        key_layers = int(key_layers)
+        if key_layers < 2:
+            raise ValueError(f"key_layers must be >= 2, got {key_layers}")
 
-        # Value network: defines integrand dependence on (x, u)
-        self.value_net = nn.Sequential(
-            nn.Linear(dx_enc + du, hidden),
-            activation_fn(),
-            nn.Linear(hidden, hidden),
-            activation_fn(),
-            nn.Linear(hidden, dv),
-        )
+        key_layers_list = [nn.Linear(dx_enc, key_hidden_dim), activation_fn()]
+        for _ in range(key_layers - 2):
+            key_layers_list.append(nn.Linear(key_hidden_dim, key_hidden_dim))
+            key_layers_list.append(activation_fn())
+        key_layers_list.append(nn.Linear(key_hidden_dim, dk))
+        self.key_net = nn.Sequential(*key_layers_list)
+
+        # Value network: configurable input and depth
+        if self.value_mode == "linear_u":
+            self.value_net = nn.Linear(du, dv)
+            self._value_includes_x = False
+        elif self.value_mode == "mlp_u":
+            self.value_net = nn.Sequential(
+                nn.Linear(du, hidden),
+                activation_fn(),
+                nn.Linear(hidden, hidden),
+                activation_fn(),
+                nn.Linear(hidden, dv),
+            )
+            self._value_includes_x = False
+        else:
+            self.value_net = nn.Sequential(
+                nn.Linear(dx_enc + du, hidden),
+                activation_fn(),
+                nn.Linear(hidden, hidden),
+                activation_fn(),
+                nn.Linear(hidden, dv),
+            )
+            self._value_includes_x = True
 
         # Learnable query tokens (test functions)
         self.query_tokens = nn.Parameter(torch.randn(1, p, dk))
@@ -127,7 +159,10 @@ class QuadratureHead(nn.Module):
 
         # 1) Compute keys/values
         K = self.key_net(x_enc)  # (B, N, dk)
-        V = self.value_net(torch.cat([x_enc, u], dim=-1))  # (B, N, dv)
+        if self._value_includes_x:
+            V = self.value_net(torch.cat([x_enc, u], dim=-1))  # (B, N, dv)
+        else:
+            V = self.value_net(u)  # (B, N, dv)
 
         # 2) Token parameters
         Q = self.query_tokens.expand(batch_size, -1, -1)  # (B, p, dk)
@@ -138,8 +173,12 @@ class QuadratureHead(nn.Module):
             tau = torch.exp(self.log_tau) + self.eps
             scores = scores / tau
 
-        # Softplus gives positive, non-normalized test function weights per sensor
-        Phi = F.softplus(scores)  # (B, p, N)
+        if self.phi_activation == "tanh":
+            Phi = torch.tanh(scores)  # (B, p, N)
+        elif self.phi_activation == "softsign":
+            Phi = scores / (1.0 + scores.abs())  # (B, p, N)
+        else:
+            Phi = F.softplus(scores)  # (B, p, N)
 
         # 4) Quadrature weights and mask
         if sensor_weights is None:
@@ -169,4 +208,3 @@ class QuadratureHead(nn.Module):
             raise ValueError(f"Unknown normalize option: {self.normalize}")
 
         return self.rho_token(pooled)  # (B, p, dout)
-
