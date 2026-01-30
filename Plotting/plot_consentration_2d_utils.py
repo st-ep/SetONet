@@ -240,3 +240,202 @@ def plot_concentration_results(model, dataset, concentration_dataset, device, sa
         print(f"Saved concentration results plot to {save_path}")
     
     return fig
+
+
+def plot_concentration_inputs_only(
+    dataset,
+    sample_idx=0,
+    save_path=None,
+    dataset_split="test",
+    fig_size=(6, 6),
+    dpi=600,
+):
+    """
+    Plot only the input source locations for a single sample.
+
+    Args:
+        dataset: HuggingFace dataset
+        sample_idx: Index of sample to plot
+        save_path: Base path (without extension) to save PNG/PDF
+        dataset_split: 'train' or 'test'
+        fig_size: Figure size in inches (width, height)
+        dpi: Resolution for PNG/PDF output
+    """
+    data = dataset[dataset_split]
+    sample = data[sample_idx]
+
+    sources = np.array(sample["sources"])  # shape: (n_sources, 3) -> [x, y, rate]
+
+    fig, ax = plt.subplots(figsize=fig_size)
+    ax.scatter(
+        sources[:, 0],
+        sources[:, 1],
+        c=sources[:, 2],
+        # Matplotlib marker size is in points^2. For 1.5x radius, scale area by 2.25.
+        s=225,
+        cmap="viridis",
+        edgecolors="white",
+        linewidths=0.01,
+    )
+
+    # Keep a clean, square canvas with no labels or ticks
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+    if save_path:
+        base_path = Path(save_path)
+        if base_path.suffix:
+            base_path = base_path.with_suffix("")
+        png_path = base_path.with_suffix(".png")
+        pdf_path = base_path.with_suffix(".pdf")
+        fig.savefig(png_path, dpi=dpi)
+        fig.savefig(pdf_path, dpi=dpi)
+        print(f"Saved input-only plot to {png_path} and {pdf_path}")
+
+    return fig
+
+
+def plot_concentration_prediction_only(
+    model,
+    dataset,
+    concentration_dataset,
+    device,
+    sample_idx=0,
+    save_path=None,
+    dataset_split="test",
+    fig_size=(6, 6),
+    dpi=600,
+):
+    """
+    Plot only the model prediction field for a single sample.
+
+    Args:
+        model: Trained SetONet model
+        dataset: HuggingFace dataset
+        concentration_dataset: ConcentrationDataset wrapper (unused, kept for symmetry)
+        device: PyTorch device
+        sample_idx: Index of sample to plot
+        save_path: Base path (without extension) to save PNG/PDF
+        dataset_split: 'train' or 'test'
+        fig_size: Figure size in inches (width, height)
+        dpi: Resolution for PNG/PDF output
+    """
+    model.eval()
+
+    data = dataset[dataset_split]
+    sample = data[sample_idx]
+
+    sources = np.array(sample["sources"])  # shape: (n_sources, 3) -> [x, y, rate]
+
+    # Unified visualization grid (same as full plot)
+    grid_n = 64
+    x = np.linspace(0, 1, grid_n)
+    y = np.linspace(0, 1, grid_n)
+    X, Y = np.meshgrid(x, y, indexing="xy")
+    viz_coords = np.column_stack([X.flatten(), Y.flatten()])
+
+    with torch.no_grad():
+        source_coords = torch.tensor(sources[:, :2], device=device, dtype=torch.float32).unsqueeze(0)
+        source_rates = torch.tensor(sources[:, 2:3], device=device, dtype=torch.float32).unsqueeze(0)
+        target_coords = torch.tensor(viz_coords, device=device, dtype=torch.float32).unsqueeze(0)
+        pred = model(source_coords, source_rates, target_coords)
+        pred_field = pred.squeeze().cpu().numpy().reshape(grid_n, grid_n)
+
+    fig, ax = plt.subplots(figsize=fig_size)
+    ax.contourf(X, Y, pred_field, levels=100, cmap="plasma")
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+    if save_path:
+        base_path = Path(save_path)
+        if base_path.suffix:
+            base_path = base_path.with_suffix("")
+        png_path = base_path.with_suffix(".png")
+        pdf_path = base_path.with_suffix(".pdf")
+        fig.savefig(png_path, dpi=dpi)
+        fig.savefig(pdf_path, dpi=dpi)
+        print(f"Saved prediction-only plot to {png_path} and {pdf_path}")
+
+    return fig
+
+
+def plot_concentration_query_points_only(
+    dataset,
+    concentration_dataset,
+    sample_idx=0,
+    save_path=None,
+    dataset_split="test",
+    n_points=50,
+    fig_size=(6, 6),
+    dpi=600,
+):
+    """
+    Plot only the query (target) locations for a single sample.
+
+    Args:
+        dataset: HuggingFace dataset
+        concentration_dataset: ConcentrationDataset wrapper
+        sample_idx: Index of sample to plot
+        save_path: Base path (without extension) to save PNG/PDF
+        dataset_split: 'train' or 'test'
+        n_points: Number of randomly selected query points to plot
+        fig_size: Figure size in inches (width, height)
+        dpi: Resolution for PNG/PDF output
+    """
+    data = dataset[dataset_split]
+    sample = data[sample_idx]
+
+    if "grid_coords" in sample:
+        query_coords = np.array(sample["grid_coords"])
+    else:
+        query_coords = concentration_dataset.grid_coords.detach().cpu().numpy()
+
+    total_points = query_coords.shape[0]
+    n_select = min(n_points, total_points)
+    if n_select > 0:
+        rng = np.random.default_rng()
+        select_idx = rng.choice(total_points, size=n_select, replace=False)
+        query_coords = query_coords[select_idx]
+
+    fig, ax = plt.subplots(figsize=fig_size)
+    ax.scatter(
+        query_coords[:, 0],
+        query_coords[:, 1],
+        s=225,
+        c="#558B2F",
+        marker="X",
+    )
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+    if save_path:
+        base_path = Path(save_path)
+        if base_path.suffix:
+            base_path = base_path.with_suffix("")
+        png_path = base_path.with_suffix(".png")
+        pdf_path = base_path.with_suffix(".pdf")
+        fig.savefig(png_path, dpi=dpi)
+        fig.savefig(pdf_path, dpi=dpi)
+        print(f"Saved query-points plot to {png_path} and {pdf_path}")
+
+    return fig
