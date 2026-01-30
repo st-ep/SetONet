@@ -57,6 +57,9 @@ def parse_arguments():
     parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
+    parser.add_argument('--son_quad_key_hidden', type=int, default=None, help='Quadrature key MLP hidden width (default: son_rho_hidden)')
+    parser.add_argument('--son_quad_key_layers', type=int, default=3, help='Quadrature key MLP depth (>=2)')
+    parser.add_argument('--son_quad_phi_activation', type=str, default="tanh", choices=["tanh", "softsign", "softplus"], help='Quadrature Phi activation')
     parser.add_argument(
         '--son_galerkin_normalize',
         type=str,
@@ -78,7 +81,7 @@ def parse_arguments():
     parser.add_argument('--son_epochs', type=int, default=50000, help='Number of epochs for SetONet')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for positional encoding')
+    parser.add_argument('--pos_encoding_dim', type=int, default=128, help='Dimension for positional encoding')
     parser.add_argument('--pos_encoding_max_freq', type=float, default=0.01, help='Max frequency for sinusoidal positional encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[15000, 30000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
@@ -157,6 +160,9 @@ def create_model(args, device):
         galerkin_dv=args.son_galerkin_dv,
         quad_dk=args.son_quad_dk,
         quad_dv=args.son_quad_dv,
+        quad_key_hidden=args.son_quad_key_hidden,
+        quad_key_layers=args.son_quad_key_layers,
+        quad_phi_activation=args.son_quad_phi_activation,
         galerkin_normalize=args.son_galerkin_normalize,
         galerkin_learn_temperature=args.son_galerkin_learn_temperature,
         adapt_quad_rank=args.son_adapt_quad_rank,

@@ -572,7 +572,27 @@ def get_benchmark_overrides(variant: Dict[str, Any], benchmark: str) -> Dict[str
     return {}
 
 
-def generate_all_configs(benchmarks_dir: Path) -> Dict[str, Any]:
+def apply_user_overrides(
+    config: Dict[str, Any],
+    user_overrides: Optional[Dict[str, Any]],
+    model_name: str,
+    benchmark: str,
+) -> Dict[str, Any]:
+    """Apply user overrides using the same rules as build_job_queue."""
+    if not user_overrides:
+        return config
+    if benchmark in user_overrides:
+        config.update(user_overrides[benchmark])
+    model_benchmark = f"{model_name}_{benchmark}"
+    if model_benchmark in user_overrides:
+        config.update(user_overrides[model_benchmark])
+    return config
+
+
+def generate_all_configs(
+    benchmarks_dir: Path,
+    user_overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Generate complete configs for all (model_variant, benchmark) pairs."""
     configs = {}
     for model_name, variant in MODEL_VARIANTS.items():
@@ -588,6 +608,7 @@ def generate_all_configs(benchmarks_dir: Path) -> Dict[str, Any]:
             bench_config = load_benchmark_config(benchmarks_dir, base_model, benchmark)
             bench_specific = get_benchmark_overrides(variant, benchmark)
             config = {**bench_config, **variant_overrides, **bench_specific, "_script": script_name, "_base_model": base_model}
+            config = apply_user_overrides(config, user_overrides, model_name, benchmark)
             model_configs[benchmark] = config
         if model_configs:
             configs[model_name] = model_configs
@@ -599,7 +620,10 @@ def count_parameters(model) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def generate_param_table(benchmarks_dir: Path) -> Dict[str, Dict[str, int]]:
+def generate_param_table(
+    benchmarks_dir: Path,
+    user_overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, int]]:
     """Generate parameter counts for all (model, benchmark) pairs."""
     project_root = benchmarks_dir.parent
     if str(project_root) not in sys.path:
@@ -628,6 +652,7 @@ def generate_param_table(benchmarks_dir: Path) -> Dict[str, Dict[str, int]]:
             cfg = load_benchmark_config(benchmarks_dir, base_model, benchmark)
             cfg.update(variant_overrides)
             cfg.update(get_benchmark_overrides(variant, benchmark))
+            cfg = apply_user_overrides(cfg, user_overrides, model_name, benchmark)
             
             try:
                 if base_model == "setonet":

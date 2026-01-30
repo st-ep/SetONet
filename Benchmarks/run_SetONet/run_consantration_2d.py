@@ -18,7 +18,12 @@ from Models.utils.helper_utils import calculate_l2_relative_error
 from Models.utils.config_utils import save_experiment_configuration
 from Models.utils.tensorboard_callback import TensorBoardCallback
 from Data.concentration_data.concentration_2d_dataset import load_concentration_dataset
-from Plotting.plot_consentration_2d_utils import plot_concentration_results
+from Plotting.plot_consentration_2d_utils import (
+    plot_concentration_results,
+    plot_concentration_inputs_only,
+    plot_concentration_prediction_only,
+    plot_concentration_query_points_only,
+)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -56,6 +61,9 @@ def parse_arguments():
     parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
+    parser.add_argument('--son_quad_key_hidden', type=int, default=None, help='Quadrature key MLP hidden width (default: son_rho_hidden)')
+    parser.add_argument('--son_quad_key_layers', type=int, default=3, help='Quadrature key MLP depth (>=2)')
+    parser.add_argument('--son_quad_phi_activation', type=str, default="tanh", choices=["tanh", "softsign", "softplus"], help='Quadrature Phi activation')
     parser.add_argument(
         '--son_galerkin_normalize',
         type=str,
@@ -156,6 +164,9 @@ def create_model(args, device):
         galerkin_dv=args.son_galerkin_dv,
         quad_dk=args.son_quad_dk,
         quad_dv=args.son_quad_dv,
+        quad_key_hidden=args.son_quad_key_hidden,
+        quad_key_layers=args.son_quad_key_layers,
+        quad_phi_activation=args.son_quad_phi_activation,
         galerkin_normalize=args.son_galerkin_normalize,
         galerkin_learn_temperature=args.son_galerkin_learn_temperature,
         adapt_quad_rank=args.son_adapt_quad_rank,
@@ -304,17 +315,39 @@ def main():
     
     # Plot results
     print("Generating plots...")
+    son_images_dir = os.path.join(log_dir, "son_images")
+    os.makedirs(son_images_dir, exist_ok=True)
     # Plot 3 test samples
-    for i in range(3):
+    for i in range(10):
         plot_save_path = os.path.join(log_dir, f"concentration_results_test_sample_{i}.png")
         plot_concentration_results(model, dataset, concentration_dataset, device, sample_idx=i, 
                                  save_path=plot_save_path, dataset_split="test")
+        input_save_base = os.path.join(son_images_dir, f"concentration_input_test_sample_{i}")
+        plot_concentration_inputs_only(dataset, sample_idx=i, save_path=input_save_base, dataset_split="test")
+        pred_save_base = os.path.join(son_images_dir, f"concentration_pred_test_sample_{i}")
+        plot_concentration_prediction_only(
+            model, dataset, concentration_dataset, device, sample_idx=i, save_path=pred_save_base, dataset_split="test"
+        )
+        query_save_base = os.path.join(son_images_dir, f"concentration_query_test_sample_{i}")
+        plot_concentration_query_points_only(
+            dataset, concentration_dataset, sample_idx=i, save_path=query_save_base, dataset_split="test"
+        )
     
     # Plot 3 train samples  
-    for i in range(3):
+    for i in range(10):
         plot_save_path = os.path.join(log_dir, f"concentration_results_train_sample_{i}.png")
         plot_concentration_results(model, dataset, concentration_dataset, device, sample_idx=i, 
                                  save_path=plot_save_path, dataset_split="train")
+        input_save_base = os.path.join(son_images_dir, f"concentration_input_train_sample_{i}")
+        plot_concentration_inputs_only(dataset, sample_idx=i, save_path=input_save_base, dataset_split="train")
+        pred_save_base = os.path.join(son_images_dir, f"concentration_pred_train_sample_{i}")
+        plot_concentration_prediction_only(
+            model, dataset, concentration_dataset, device, sample_idx=i, save_path=pred_save_base, dataset_split="train"
+        )
+        query_save_base = os.path.join(son_images_dir, f"concentration_query_train_sample_{i}")
+        plot_concentration_query_points_only(
+            dataset, concentration_dataset, sample_idx=i, save_path=query_save_base, dataset_split="train"
+        )
     
     # Save experiment configuration with test results
     save_experiment_configuration(args, model, dataset, concentration_dataset, device, log_dir, dataset_type="concentration_2d", test_results=test_results)

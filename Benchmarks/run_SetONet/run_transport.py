@@ -89,6 +89,9 @@ def parse_arguments():
     parser.add_argument("--son_galerkin_dv", type=int, default=None, help="Galerkin PoU value dim")
     parser.add_argument("--son_quad_dk", type=int, default=None, help="Quadrature key/query dim")
     parser.add_argument("--son_quad_dv", type=int, default=None, help="Quadrature value dim")
+    parser.add_argument("--son_quad_key_hidden", type=int, default=None, help="Quadrature key MLP hidden width (default: son_rho_hidden)")
+    parser.add_argument("--son_quad_key_layers", type=int, default=3, help="Quadrature key MLP depth (>=2)")
+    parser.add_argument("--son_quad_phi_activation", type=str, default="tanh", choices=["tanh", "softsign", "softplus"], help="Quadrature Phi activation")
     parser.add_argument(
         "--son_galerkin_normalize",
         type=str,
@@ -206,6 +209,9 @@ def create_model(args, device):
         galerkin_dv=args.son_galerkin_dv,
         quad_dk=args.son_quad_dk,
         quad_dv=args.son_quad_dv,
+        quad_key_hidden=args.son_quad_key_hidden,
+        quad_key_layers=args.son_quad_key_layers,
+        quad_phi_activation=args.son_quad_phi_activation,
         galerkin_normalize=args.son_galerkin_normalize,
         galerkin_learn_temperature=args.son_galerkin_learn_temperature,
         adapt_quad_rank=args.son_adapt_quad_rank,

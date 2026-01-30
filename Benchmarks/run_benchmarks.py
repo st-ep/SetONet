@@ -102,10 +102,15 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def save_configs_and_param_table(script_dir: Path, results_dir: Path) -> None:
+def save_configs_and_param_table(
+    script_dir: Path,
+    results_dir: Path,
+    config: Dict[str, Any] | None = None,
+) -> None:
     """Generate and save all_configs.json and param_table.csv."""
+    user_overrides = (config or {}).get("overrides")
     # Save all configs
-    configs = generate_all_configs(script_dir)
+    configs = generate_all_configs(script_dir, user_overrides=user_overrides)
     config_path = results_dir / "all_configs.json"
     with open(config_path, 'w') as f:
         json.dump({"generated_at": datetime.now().isoformat(),
@@ -114,7 +119,7 @@ def save_configs_and_param_table(script_dir: Path, results_dir: Path) -> None:
     logging.info(f"Saved configs to: {config_path}")
 
     # Save param table
-    param_table = generate_param_table(script_dir)
+    param_table = generate_param_table(script_dir, user_overrides=user_overrides)
     all_benchmarks = sorted(set(b for m in param_table.values() for b in m.keys()))
     csv_path = results_dir / "param_table.csv"
     with open(csv_path, 'w') as f:
@@ -211,7 +216,7 @@ def main():
         results_dir.mkdir(parents=True, exist_ok=True)
 
     shutil.copy(config_path, results_dir / "benchmark_config.yaml")
-    save_configs_and_param_table(script_dir, results_dir)
+    save_configs_and_param_table(script_dir, results_dir, config)
 
     if args.dry_run:
         if args.regen_plots:

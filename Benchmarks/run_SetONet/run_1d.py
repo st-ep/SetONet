@@ -53,6 +53,10 @@ def parse_arguments():
     parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
+    parser.add_argument('--son_quad_key_hidden', type=int, default=None, help='Quadrature key MLP hidden width (default: son_rho_hidden)')
+    parser.add_argument('--son_quad_key_layers', type=int, default=3, help='Quadrature key MLP depth (>=2)')
+    parser.add_argument('--son_quad_phi_activation', type=str, default="softplus", choices=["tanh", "softsign", "softplus"], help='Quadrature Phi activation')
+    parser.add_argument('--son_quad_value_mode', type=str, default="linear_u", choices=["linear_u", "mlp_u", "mlp_xu"], help='Quadrature value net mode')
     parser.add_argument(
         '--son_galerkin_normalize',
         type=str,
@@ -73,7 +77,7 @@ def parse_arguments():
     parser.add_argument('--son_lr', type=float, default=5e-4, help='Learning rate for SetONet')
     parser.add_argument('--son_epochs', type=int, default=125000, help='Number of epochs for SetONet')
     parser.add_argument('--pos_encoding_type', type=str, default='sinusoidal', choices=['sinusoidal', 'skip'], help='Positional encoding type for SetONet')
-    parser.add_argument('--pos_encoding_dim', type=int, default=64, help='Dimension for sinusoidal positional encoding')
+    parser.add_argument('--pos_encoding_dim', type=int, default=32, help='Dimension for sinusoidal positional encoding')
     parser.add_argument('--pos_encoding_max_freq', type=float, default=0.1, help='Max frequency/scale for sinusoidal encoding')
     parser.add_argument("--lr_schedule_steps", type=int, nargs='+', default=[25000, 75000, 125000, 175000, 1250000, 1500000], help="List of steps for LR decay milestones.")
     parser.add_argument("--lr_schedule_gammas", type=float, nargs='+', default=[0.2, 0.5, 0.2, 0.5, 0.2, 0.5], help="List of multiplicative factors for LR decay.")
