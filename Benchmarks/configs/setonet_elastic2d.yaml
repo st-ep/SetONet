@@ -19,7 +19,7 @@ son_galerkin_dk: 32
 son_galerkin_dv: 32
 son_galerkin_normalize: token
 son_galerkin_learn_temperature: false
-son_quad_dk: 32
+son_quad_dk: 64
 son_quad_dv: 32
 son_adapt_quad_rank: 4
 son_adapt_quad_hidden: 64
@@ -46,4 +46,3 @@ replace_with_nearest: false
 enable_tensorboard: true
 tb_eval_frequency: 1000
 tb_test_samples: 100
-

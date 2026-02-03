@@ -102,6 +102,7 @@ MODEL_VARIANTS = {
         }},
     "setonet_quadrature": {"base": "setonet", "overrides": {"son_branch_head_type": "quadrature"},
         "benchmark_overrides": {
+            ("1d_derivative", "1d_derivative_varsens", "1d_derivative_robust"): {"son_quad_value_mode": "mlp_xu"},
             ("1d_", "elastic_", "darcy_", "burgers_"): {"son_rho_hidden": 200},
             ("transport",): {"pos_encoding_max_freq": 0.1},
         }},

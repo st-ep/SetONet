@@ -54,11 +54,12 @@ def parse_arguments():
     )
     parser.add_argument('--son_galerkin_dk', type=int, default=None, help='Galerkin PoU key/query dim (default: son_phi_output_size)')
     parser.add_argument('--son_galerkin_dv', type=int, default=None, help='Galerkin PoU value dim (default: son_phi_output_size)')
-    parser.add_argument('--son_quad_dk', type=int, default=None, help='Quadrature/adaptive quadrature key/query dim (default: son_phi_output_size)')
+    parser.add_argument('--son_quad_dk', type=int, default=64, help='Quadrature/adaptive quadrature key/query dim (default: 64)')
     parser.add_argument('--son_quad_dv', type=int, default=None, help='Quadrature/adaptive quadrature value dim (default: son_phi_output_size)')
     parser.add_argument('--son_quad_key_hidden', type=int, default=None, help='Quadrature key MLP hidden width (default: son_rho_hidden)')
     parser.add_argument('--son_quad_key_layers', type=int, default=3, help='Quadrature key MLP depth (>=2)')
     parser.add_argument('--son_quad_phi_activation', type=str, default="softplus", choices=["tanh", "softsign", "softplus"], help='Quadrature Phi activation')
+    parser.add_argument('--son_quad_value_mode', type=str, default="linear_u", choices=["linear_u", "mlp_u", "mlp_xu"], help='Quadrature value net mode')
     parser.add_argument(
         '--son_galerkin_normalize',
         type=str,
@@ -95,7 +96,7 @@ def parse_arguments():
     # Model loading and misc
     parser.add_argument('--load_model_path', type=str, default=None, help='Path to pre-trained SetONet model')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default='cuda:1', help='Torch device to use.')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Torch device to use.')
     
     # TensorBoard logging
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging')
@@ -170,6 +171,7 @@ def create_setonet_model(args, device):
         quad_key_hidden=args.son_quad_key_hidden,
         quad_key_layers=args.son_quad_key_layers,
         quad_phi_activation=args.son_quad_phi_activation,
+        quad_value_mode=args.son_quad_value_mode,
         galerkin_normalize=args.son_galerkin_normalize,
         galerkin_learn_temperature=args.son_galerkin_learn_temperature,
         adapt_quad_rank=args.son_adapt_quad_rank,

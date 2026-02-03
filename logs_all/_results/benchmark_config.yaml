@@ -31,10 +31,10 @@ devices: ["cuda:0", "cuda:1"]
 # -----------------------------------------------------------------------------
 models:
 #  - deeponet
-#  - vidon
-#  - setonet_attention
-#  - setonet_sum
-#  - setonet_mean
+  - vidon
+  - setonet_attention
+  - setonet_sum
+  - setonet_mean
 #  - setonet_petrov
 #  - setonet_galerkin
   - setonet_quadrature
@@ -88,37 +88,6 @@ overrides:
   # Example: reduce epochs for all heat_2d runs
   # heat_2d:
   #   son_epochs: 50000
-  # Parameter-matched phi sizes for fair SetONet comparisons on 2D heat-like benchmarks
-  setonet_mean_heat_2d_P10:
-    son_phi_output_size: 150
-  setonet_sum_heat_2d_P10:
-    son_phi_output_size: 150
-  setonet_attention_heat_2d_P10:
-    son_phi_output_size: 88
-  setonet_mean_heat_2d_P30:
-    son_phi_output_size: 150
-  setonet_sum_heat_2d_P30:
-    son_phi_output_size: 150
-  setonet_attention_heat_2d_P30:
-    son_phi_output_size: 88
-  setonet_mean_concentration_2d:
-    son_phi_output_size: 150
-  setonet_sum_concentration_2d:
-    son_phi_output_size: 150
-  setonet_attention_concentration_2d:
-    son_phi_output_size: 88
-  setonet_mean_transport:
-    son_phi_output_size: 90
-  setonet_sum_transport:
-    son_phi_output_size: 90
-  setonet_attention_transport:
-    son_phi_output_size: 60
-  setonet_mean_diffraction_2d:
-    son_phi_output_size: 90
-  setonet_sum_diffraction_2d:
-    son_phi_output_size: 90
-  setonet_attention_diffraction_2d:
-    son_phi_output_size: 60
 
 # -----------------------------------------------------------------------------
 # Advanced settings
