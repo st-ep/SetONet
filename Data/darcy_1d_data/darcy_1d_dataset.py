@@ -28,11 +28,13 @@ class DarcyDataGenerator:
     
     def __init__(self, dataset, sensor_indices, query_indices, device, params, grid_points):
         print("📊 Pre-loading and optimizing dataset...")
-        
+
         # Store basic info
         self.device = device
         self.params = params
         self.batch_size = params['batch_size_train']
+        self.variable_sensors = params.get('variable_sensors', False)
+        self.sensor_size = params['sensor_size']
         
         # PRE-LOAD all data to GPU for maximum efficiency
         train_data = dataset['train']
@@ -70,8 +72,12 @@ class DarcyDataGenerator:
         # Fixed sensors: pre-extract sensor data for efficiency
         self.sensor_indices = sensor_indices.to(device)
         self.sensor_x = self.grid_points[self.sensor_indices].view(-1, 1)
-        self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
-        print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (FIXED sensors)")
+        if not self.variable_sensors:
+            self.u_sensors = self.u_data[:, self.sensor_indices]  # [n_train, n_sensors]
+            print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (FIXED sensors)")
+        else:
+            self.u_sensors = None
+            print(f"✅ Dataset optimized: {n_train} samples pre-loaded to GPU (VARIABLE sensors per batch)")
         
         if self.train_sensor_dropoff > 0.0:
             replacement_mode = "nearest replacement" if self.replace_with_nearest else "removal"
@@ -82,9 +88,15 @@ class DarcyDataGenerator:
         # Random sampling directly on GPU (much faster)
         indices = torch.randint(0, self.n_train, (self.batch_size,), device=self.device)
         
-        # Fixed sensors: use pre-extracted sensor data
-        u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
-        batch_sensor_x = self.sensor_x
+        if self.variable_sensors:
+            sensor_indices = torch.randperm(self.n_grid, device=self.device)[: self.sensor_size]
+            sensor_indices = sensor_indices.sort()[0]
+            batch_sensor_x = self.grid_points[sensor_indices].view(-1, 1)
+            u_at_sensors = self.u_data[indices][:, sensor_indices]
+        else:
+            # Fixed sensors: use pre-extracted sensor data
+            u_at_sensors = self.u_sensors[indices]  # [batch_size, n_sensors]
+            batch_sensor_x = self.sensor_x
         
         # Query data is always the same
         s_at_queries = self.s_queries[indices]  # [batch_size, n_queries]
@@ -144,6 +156,8 @@ class DarcyDataGenerator:
 
 def create_sensor_points(params, device, grid_points):
     """Create fixed sensor points from the grid."""
+    if params.get('variable_sensors', False):
+        print("Using variable sensor locations during training; fixed evenly spaced sensors for evaluation.")
     # Use fixed sensor locations - evenly spaced subset of grid points
     sensor_indices = torch.linspace(0, len(grid_points)-1, params['sensor_size'], dtype=torch.long)
     sensor_x = grid_points[sensor_indices].to(device).view(-1, 1)
@@ -167,8 +181,8 @@ def setup_parameters(args):
         'n_trunk_points_train': args.n_query_points,  # Query points are trunk points for Darcy
         'n_test_samples_eval': args.n_test_samples_eval,
         'sensor_seed': 42,
-        'variable_sensors': False,
+        'variable_sensors': args.variable_sensors,
         'eval_sensor_dropoff': args.eval_sensor_dropoff,
         'replace_with_nearest': getattr(args, 'replace_with_nearest', False),  # Default to False for DeepONet scripts
         'train_sensor_dropoff': args.train_sensor_dropoff,
-    } 
+    }

@@ -59,9 +59,9 @@ class QuadratureHead(nn.Module):
             raise ValueError(
                 f"phi_activation must be 'tanh', 'softsign', or 'softplus', got {phi_activation}"
             )
-        if self.value_mode not in ["linear_u", "mlp_u", "mlp_xu"]:
+        if self.value_mode not in ["linear_u", "mlp_u", "mlp_xu", "gated_linear"]:
             raise ValueError(
-                f"value_mode must be 'linear_u', 'mlp_u', or 'mlp_xu', got {value_mode}"
+                f"value_mode must be 'linear_u', 'mlp_u', 'mlp_xu', or 'gated_linear', got {value_mode}"
             )
 
         # Position-only key network: defines test/basis dependence on x
@@ -78,9 +78,11 @@ class QuadratureHead(nn.Module):
         self.key_net = nn.Sequential(*key_layers_list)
 
         # Value network: configurable input and depth
+        self._value_includes_x = False
+        self._value_gated = False
         if self.value_mode == "linear_u":
-            self.value_net = nn.Linear(du, dv)
-            self._value_includes_x = False
+            # Bias-free to keep operator linear in u
+            self.value_net = nn.Linear(du, dv, bias=False)
         elif self.value_mode == "mlp_u":
             self.value_net = nn.Sequential(
                 nn.Linear(du, hidden),
@@ -89,8 +91,7 @@ class QuadratureHead(nn.Module):
                 activation_fn(),
                 nn.Linear(hidden, dv),
             )
-            self._value_includes_x = False
-        else:
+        elif self.value_mode == "mlp_xu":
             self.value_net = nn.Sequential(
                 nn.Linear(dx_enc + du, hidden),
                 activation_fn(),
@@ -99,6 +100,16 @@ class QuadratureHead(nn.Module):
                 nn.Linear(hidden, dv),
             )
             self._value_includes_x = True
+        else:
+            # Gated linear: V = gate(x) * (W u + b), gate depends only on x
+            # Bias-free to keep operator linear in u
+            self.value_net = nn.Linear(du, dv, bias=False)
+            self.gate_net = nn.Sequential(
+                nn.Linear(dx_enc, hidden),
+                activation_fn(),
+                nn.Linear(hidden, dv),
+            )
+            self._value_gated = True
 
         # Learnable query tokens (test functions)
         self.query_tokens = nn.Parameter(torch.randn(1, p, dk))
@@ -163,6 +174,9 @@ class QuadratureHead(nn.Module):
             V = self.value_net(torch.cat([x_enc, u], dim=-1))  # (B, N, dv)
         else:
             V = self.value_net(u)  # (B, N, dv)
+            if self._value_gated:
+                gate = torch.sigmoid(self.gate_net(x_enc))
+                V = V * gate
 
         # 2) Token parameters
         Q = self.query_tokens.expand(batch_size, -1, -1)  # (B, p, dk)
@@ -208,3 +222,108 @@ class QuadratureHead(nn.Module):
             raise ValueError(f"Unknown normalize option: {self.normalize}")
 
         return self.rho_token(pooled)  # (B, p, dout)
+
+    def apply_adjoint(
+        self,
+        x_enc: torch.Tensor,
+        u: torch.Tensor,
+        g_b: torch.Tensor,
+        sensor_mask: Optional[torch.Tensor] = None,
+        sensor_weights: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Apply the exact adjoint of the quadrature head with respect to u.
+        Only supports value_mode in {"linear_u", "gated_linear"} and linear rho_token.
+
+        Args:
+            x_enc: (B, N, dx_enc)
+            u: (B, N, du)
+            g_b: (B, p, dout) gradient w.r.t. head output
+        Returns:
+            grad_u: (B, N, du)
+        """
+        if self.value_mode not in {"linear_u", "gated_linear"}:
+            raise NotImplementedError("Adjoint only implemented for linear_u and gated_linear value modes.")
+
+        if x_enc.dim() != 3 or u.dim() != 3 or g_b.dim() != 3:
+            raise ValueError(f"Expected 3D tensors, got {x_enc.shape=}, {u.shape=}, {g_b.shape=}")
+
+        batch_size, n_sensors = x_enc.shape[0], x_enc.shape[1]
+        if sensor_mask is not None:
+            if sensor_mask.dim() == 3 and sensor_mask.shape[-1] == 1:
+                sensor_mask = sensor_mask.squeeze(-1)
+            if sensor_mask.shape != (batch_size, n_sensors):
+                raise ValueError(f"{sensor_mask.shape=} must be (B, N) = {(batch_size, n_sensors)}")
+            sensor_mask = sensor_mask.to(device=x_enc.device).bool()
+
+        if sensor_weights is not None:
+            if sensor_weights.dim() == 3 and sensor_weights.shape[-1] == 1:
+                sensor_weights = sensor_weights.squeeze(-1)
+            if sensor_weights.shape != (batch_size, n_sensors):
+                raise ValueError(f"{sensor_weights.shape=} must be (B, N) = {(batch_size, n_sensors)}")
+            sensor_weights = sensor_weights.to(device=x_enc.device, dtype=x_enc.dtype)
+
+        if not isinstance(self.rho_token, (nn.Identity, nn.Linear)):
+            raise NotImplementedError("Adjoint only supports linear rho_token.")
+
+        # Compute Phi (depends only on x)
+        K = self.key_net(x_enc)  # (B, N, dk)
+        Q = self.query_tokens.expand(batch_size, -1, -1)  # (B, p, dk)
+        scores = torch.einsum("bpk,bnk->bpn", Q, K) / math.sqrt(self.dk)
+        if self.learn_temperature:
+            tau = torch.exp(self.log_tau) + self.eps
+            scores = scores / tau
+
+        if self.phi_activation == "tanh":
+            Phi = torch.tanh(scores)
+        elif self.phi_activation == "softsign":
+            Phi = scores / (1.0 + scores.abs())
+        else:
+            Phi = F.softplus(scores)
+
+        # Weights
+        if sensor_weights is None:
+            w = torch.ones((batch_size, n_sensors), device=x_enc.device, dtype=x_enc.dtype)
+        else:
+            w = torch.clamp(sensor_weights, min=0.0).to(dtype=x_enc.dtype)
+
+        if sensor_mask is not None:
+            m = sensor_mask.to(dtype=x_enc.dtype)
+            w = w * m
+            Phi = Phi * m.unsqueeze(1)
+
+        # Undo rho_token if needed
+        if isinstance(self.rho_token, nn.Linear):
+            g_pooled = torch.einsum("bpd,df->bpf", g_b, self.rho_token.weight)
+        else:
+            g_pooled = g_b
+
+        # Undo normalization
+        if self.normalize == "total":
+            denom = w.sum(dim=1).clamp_min(self.eps)
+            g_pooled = g_pooled / denom.view(batch_size, 1, 1)
+        elif self.normalize == "token":
+            mass = torch.einsum("bpn,bn->bp", Phi, w).clamp_min(self.eps)
+            g_pooled = g_pooled / mass.unsqueeze(-1)
+        elif self.normalize == "none":
+            pass
+        else:
+            raise ValueError(f"Unknown normalize option: {self.normalize}")
+
+        # g_V: (B, N, dv)
+        g_V = torch.einsum("bpn,bpd,bn->bnd", Phi, g_pooled, w)
+
+        if self.value_mode == "gated_linear":
+            gate = torch.sigmoid(self.gate_net(x_enc))
+            g_V = g_V * gate
+
+        if not isinstance(self.value_net, nn.Linear):
+            raise NotImplementedError("Adjoint only supports linear value_net.")
+
+        W = self.value_net.weight  # (dv, du)
+        grad_u = torch.einsum("bnd,du->bnu", g_V, W)
+
+        if sensor_mask is not None:
+            grad_u = grad_u * sensor_mask.to(dtype=x_enc.dtype).unsqueeze(-1)
+
+        return grad_u

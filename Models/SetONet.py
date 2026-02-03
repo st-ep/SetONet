@@ -46,7 +46,7 @@ class SetONet(torch.nn.Module):
                  quad_key_hidden: int | None = None,  # Quadrature key MLP hidden width (default = rho_hidden_size)
                  quad_key_layers: int = 3,  # Quadrature key MLP depth (>=2)
 	                 quad_phi_activation: str = "tanh",  # Quadrature Phi activation: "tanh" | "softsign" | "softplus"
-                 quad_value_mode: str = "linear_u",  # Quadrature value net: "linear_u" | "mlp_u" | "mlp_xu"
+                 quad_value_mode: str = "linear_u",  # Quadrature value net: "linear_u" | "mlp_u" | "mlp_xu" | "gated_linear"
                  quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
                  quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
                  adapt_quad_rank: int = 4,  # Low-rank adaptation rank R for adaptive_quadrature
@@ -589,6 +589,38 @@ class SetONet(torch.nn.Module):
             G_u_y = G_u_y + self.bias  # Broadcasting handles the addition
 
         return G_u_y
+
+    def apply_operator_adjoint(self, xs, us, ys, v, sensor_mask=None, sensor_weights=None):
+        """
+        Apply explicit adjoint of the operator w.r.t. u for the quadrature head.
+        Args:
+            xs: (B, N, input_size_src)
+            us: (B, N, output_size_src)
+            ys: (B, D, input_size_tgt)
+            v:  (B, D, output_size_tgt) gradient at outputs
+        Returns:
+            grad_u: (B, N, output_size_src)
+        """
+        if self.branch_head_type != "quadrature" or self.quadrature_head is None:
+            raise NotImplementedError("apply_operator_adjoint is only implemented for the quadrature head.")
+
+        x_enc = self._sinusoidal_encoding(xs) if self.use_positional_encoding else xs
+        inferred_weights = (
+            self._infer_sensor_weights(xs, sensor_mask) if sensor_weights is None else sensor_weights
+        )
+
+        # Trunk output: (B, D, p, output_size_tgt)
+        t = self.forward_trunk(ys)
+        # Gradient w.r.t. branch coefficients: (B, p, output_size_tgt)
+        g_b = torch.einsum("bdz,bdpz->bpz", v, t)
+
+        return self.quadrature_head.apply_adjoint(
+            x_enc,
+            us,
+            g_b,
+            sensor_mask=sensor_mask,
+            sensor_weights=inferred_weights,
+        )
 
     def _get_current_lr(self):
         """ Gets the learning rate based on the current total_steps. """
