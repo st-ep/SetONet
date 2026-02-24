@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""paper_plot_generator_1d.py - Generate 1D paper figures (Burgers + Darcy).
+"""paper_plot_generator_1d.py - Generate 1D paper figures (Darcy + synthetic).
 
 Creates figures with 3 rows (Fixed, Variable, Drop-off) and 5 columns:
 Input, Model 1, Model 2, Model 3, Residuals.
@@ -66,6 +66,10 @@ def _set_three_yticks(ax, ymin: float, ymax: float):
     ax.set_yticks(ticks)
 
 
+def _display_label(label: str) -> str:
+    return label.replace("SetONet (Quadrature)", "SetONet-Key")
+
+
 def _plot_row(axs, row_payload: dict, bench_cfg: dict):
     ax_input, ax_pred1, ax_pred2, ax_pred3, ax_res = axs
     pred_keys = row_payload["pred_keys"]
@@ -101,7 +105,7 @@ def _plot_row(axs, row_payload: dict, bench_cfg: dict):
         ax.plot(x_query, s_true, color="black", linewidth=2)
         pred_vals = pred_series.get(pred_key)
         if pred_vals is None:
-            _plot_missing(ax, MODEL_STYLES[pred_key]["label"])
+            _plot_missing(ax, _display_label(MODEL_STYLES[pred_key]["label"]))
         else:
             ax.plot(
                 x_query,
@@ -137,7 +141,7 @@ def _plot_row(axs, row_payload: dict, bench_cfg: dict):
             vals,
             color=MODEL_STYLES[key]["color"],
             linewidth=2,
-            label=MODEL_STYLES[key]["label"],
+            label=_display_label(MODEL_STYLES[key]["label"]),
         )
     ax_res.set_xlabel("x")
     ax_res.set_ylabel("pred - true")
@@ -198,7 +202,7 @@ def _render_figure(row_payloads: list[dict], bench_cfg: dict, output_path: Path)
             fig.text(
                 (pos.x0 + pos.x1) / 2,
                 label_y,
-                label,
+                _display_label(label),
                 ha="center",
                 va="top",
                 fontsize=18,
@@ -210,11 +214,11 @@ def _render_figure(row_payloads: list[dict], bench_cfg: dict, output_path: Path)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="1D paper figure generator (Burgers + Darcy)")
+    parser = argparse.ArgumentParser(description="1D paper figure generator (Darcy + synthetic)")
     parser.add_argument(
         "--benchmarks",
         nargs="+",
-        default=["burgers_1d", "darcy_1d", "1d_derivative", "1d_integral"],
+        default=["darcy_1d", "1d_derivative", "1d_integral"],
     )
     parser.add_argument("--n_samples", type=int, default=DEFAULT_N_SAMPLES)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -244,6 +248,9 @@ def main():
     })
 
     for benchmark in args.benchmarks:
+        if benchmark == "burgers_1d":
+            print("Skipping burgers_1d: this generator no longer includes Burgers.")
+            continue
         if benchmark not in BENCHMARK_CONFIGS:
             print(f"Unknown benchmark: {benchmark}")
             continue

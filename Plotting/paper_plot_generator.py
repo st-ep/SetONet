@@ -85,6 +85,14 @@ def _phase_screen_from_bumps(bumps: np.ndarray, X: np.ndarray, Y: np.ndarray, ch
     return phi_mod
 
 
+def _display_model_name(model_name: str) -> str:
+    """Return plot subtitle model name with publication naming."""
+    display_name = MODEL_DISPLAY_NAMES.get(model_name, model_name)
+    if display_name == "SetONet":
+        return "SetONet-Key"
+    return display_name
+
+
 # =============================================================================
 # Error Computation Helpers (for two-pass approach)
 # =============================================================================
@@ -368,7 +376,7 @@ def generate_heat_conc_stacked(benchmark, sample_idx, models, dataset, wrapper, 
     
     # Add row titles (centered across entire figure width)
     for model_name, ax in row_axes:
-        display_name = MODEL_DISPLAY_NAMES.get(model_name, model_name)
+        display_name = _display_model_name(model_name)
         pos = ax.get_position()
         # Position title just above the subplot (small offset to avoid overlap with row above)
         fig.text(0.5, pos.y1 + 0.03, display_name, fontsize=22, fontweight='bold',
@@ -678,7 +686,7 @@ def generate_diffraction_stacked(benchmark, sample_idx, models, dataset, wrapper
     title_rows = {0: "setonet_quadrature", 2: "vidon"}
     for row_idx, ax in row_axes:
         if row_idx in title_rows:
-            display_name = MODEL_DISPLAY_NAMES.get(title_rows[row_idx], title_rows[row_idx])
+            display_name = _display_model_name(title_rows[row_idx])
             pos = ax.get_position()
             fig.text(
                 0.5,
@@ -924,7 +932,7 @@ def generate_elastic_stacked(benchmark, sample_idx, models, dataset, wrapper, de
     
     # Add row titles (centered across entire figure width)
     for model_name, ax in row_axes:
-        display_name = MODEL_DISPLAY_NAMES.get(model_name, model_name)
+        display_name = _display_model_name(model_name)
         pos = ax.get_position()
         fig.text(0.5, pos.y1 + 0.03, display_name, fontsize=22, fontweight='bold',
                  ha='center', va='bottom', transform=fig.transFigure)
@@ -1123,7 +1131,7 @@ def generate_transport_stacked(benchmark, sample_idx, models, dataset, wrapper, 
     
     # Add row titles (centered across entire figure width)
     for model_name, ax in row_axes:
-        display_name = MODEL_DISPLAY_NAMES.get(model_name, model_name)
+        display_name = _display_model_name(model_name)
         pos = ax.get_position()
         fig.text(0.5, pos.y1 + 0.04, display_name, fontsize=22, fontweight='bold',
                  ha='center', va='bottom', transform=fig.transFigure)

@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import yaml
 
 from Data.burgers_1d_data.burgers_1d_dataset import load_burgers_dataset
 from Data.darcy_1d_data.darcy_1d_dataset import load_darcy_dataset
 from Models.SetONet import SetONet
 from Models.DeepONet import DeepONetWrapper
 from Models.VIDON import VIDON
+from Benchmarks.benchmark_utils import (
+    MODEL_VARIANTS,
+    get_benchmark_overrides,
+    load_benchmark_config,
+)
 from Plotting.paper_plot_config_1d import BENCHMARK_CONFIGS, ROW_CONFIGS_BY_BENCHMARK
+
+_script_dir = Path(__file__).parent.resolve()
+_project_root = _script_dir.parent
+_benchmarks_dir = _project_root / "Benchmarks"
+_default_benchmark_config_path = _benchmarks_dir / "benchmark_config.yaml"
 
 
 def _get_activation(name: str) -> type[nn.Module]:
@@ -28,13 +40,99 @@ def _get_activation(name: str) -> type[nn.Module]:
     }.get(name, nn.ReLU)
 
 
+def _default_quad_phi_activation(benchmark: str) -> str:
+    if benchmark.startswith(("1d_", "darcy_", "burgers_")):
+        return "softplus"
+    return "tanh"
+
+
+@lru_cache(maxsize=16)
+def _load_user_overrides(logs_dir_str: str) -> dict:
+    logs_dir = Path(logs_dir_str)
+    candidates = [
+        logs_dir / "_results" / "benchmark_config.yaml",
+        _default_benchmark_config_path,
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        with path.open("r") as handle:
+            cfg = yaml.safe_load(handle) or {}
+        overrides = cfg.get("overrides", {})
+        if isinstance(overrides, dict):
+            return overrides
+    return {}
+
+
+def _infer_setonet_variant_defaults(model_name: str) -> dict:
+    defaults = {}
+    if model_name == "setonet_sum":
+        defaults["son_aggregation"] = "sum"
+    elif model_name == "setonet_mean":
+        defaults["son_aggregation"] = "mean"
+    elif model_name == "setonet_attention":
+        defaults["son_aggregation"] = "attention"
+
+    if model_name == "setonet_petrov":
+        defaults["son_branch_head_type"] = "petrov_attention"
+    elif model_name == "setonet_galerkin":
+        defaults["son_branch_head_type"] = "galerkin_pou"
+    elif model_name == "setonet_quadrature":
+        defaults["son_branch_head_type"] = "quadrature"
+    elif model_name == "setonet_adaptive":
+        defaults["son_branch_head_type"] = "adaptive_quadrature"
+    elif model_name.startswith("setonet"):
+        defaults["son_branch_head_type"] = "standard"
+    return defaults
+
+
+def _resolve_arch_from_benchmarks(benchmark: str, model_name: str, logs_root: Path) -> dict:
+    variant = MODEL_VARIANTS.get(model_name, {"base": model_name, "overrides": {}})
+    base_model = variant.get("base", model_name)
+    arch = {}
+
+    if base_model in {"setonet", "deeponet", "vidon"}:
+        arch.update(load_benchmark_config(_benchmarks_dir, base_model, benchmark))
+        arch.update(variant.get("overrides", {}))
+        arch.update(get_benchmark_overrides(variant, benchmark))
+
+    user_overrides = _load_user_overrides(str(logs_root.resolve()))
+    bench_overrides = user_overrides.get(benchmark, {})
+    model_bench_overrides = user_overrides.get(f"{model_name}_{benchmark}", {})
+    if isinstance(bench_overrides, dict):
+        arch.update(bench_overrides)
+    if isinstance(model_bench_overrides, dict):
+        arch.update(model_bench_overrides)
+
+    if model_name.startswith("setonet"):
+        arch.setdefault("son_quad_phi_activation", _default_quad_phi_activation(benchmark))
+        arch.setdefault("son_quad_value_mode", "linear_u")
+    return arch
+
+
+def infer_setonet_branch_head_type(state_dict: dict) -> str:
+    if any(k.startswith("adaptive_quadrature_head.") for k in state_dict):
+        return "adaptive_quadrature"
+    if any(k.startswith("quadrature_head.") for k in state_dict):
+        return "quadrature"
+    if any(k.startswith("galerkin_head.") for k in state_dict):
+        return "galerkin_pou"
+    if any(k.startswith("pg_head.") for k in state_dict):
+        return "petrov_attention"
+    return "standard"
+
+
 def _load_json(path: Path) -> dict:
     with path.open("r") as handle:
         return json.load(handle)
 
 
-def _create_setonet(arch: dict, branch_head_type: str, device: str) -> SetONet:
+def _create_setonet(arch: dict, device: str) -> SetONet:
     activation_fn = _get_activation(arch.get("activation_fn", "relu"))
+    use_positional_encoding = arch.get("use_positional_encoding")
+    if use_positional_encoding is None:
+        use_positional_encoding = arch.get("pos_encoding_type", "sinusoidal") != "skip"
+
     return SetONet(
         input_size_src=1,
         output_size_src=1,
@@ -48,13 +146,35 @@ def _create_setonet(arch: dict, branch_head_type: str, device: str) -> SetONet:
         activation_fn=activation_fn,
         use_deeponet_bias=arch.get("use_deeponet_bias", True),
         phi_output_size=arch.get("son_phi_output_size", 32),
+        initial_lr=arch.get("son_lr", 5e-4),
+        lr_schedule_steps=arch.get("lr_schedule_steps"),
+        lr_schedule_gammas=arch.get("lr_schedule_gammas"),
         pos_encoding_type=arch.get("pos_encoding_type", "sinusoidal"),
         pos_encoding_dim=arch.get("pos_encoding_dim", 64),
         pos_encoding_max_freq=arch.get("pos_encoding_max_freq", 0.1),
-        use_positional_encoding=arch.get("use_positional_encoding", True),
+        use_positional_encoding=use_positional_encoding,
         aggregation_type=arch.get("son_aggregation", "attention"),
         attention_n_tokens=arch.get("attention_n_tokens", 1),
-        branch_head_type=branch_head_type,
+        branch_head_type=arch.get("son_branch_head_type", "standard"),
+        pg_dk=arch.get("son_pg_dk"),
+        pg_dv=arch.get("son_pg_dv"),
+        pg_use_logw=(not arch.get("son_pg_no_logw", False)),
+        galerkin_dk=arch.get("son_galerkin_dk"),
+        galerkin_dv=arch.get("son_galerkin_dv"),
+        galerkin_normalize=arch.get("son_galerkin_normalize", "total"),
+        galerkin_learn_temperature=arch.get("son_galerkin_learn_temperature", False),
+        quad_dk=arch.get("son_quad_dk", 64),
+        quad_dv=arch.get("son_quad_dv"),
+        quad_key_hidden=arch.get("son_quad_key_hidden"),
+        quad_key_layers=arch.get("son_quad_key_layers", 3),
+        quad_phi_activation=arch.get("son_quad_phi_activation", "softplus"),
+        quad_value_mode=arch.get("son_quad_value_mode", "linear_u"),
+        quad_normalize=arch.get("son_quad_normalize", "total"),
+        quad_learn_temperature=arch.get("son_quad_learn_temperature", False),
+        adapt_quad_rank=arch.get("son_adapt_quad_rank", 4),
+        adapt_quad_hidden=arch.get("son_adapt_quad_hidden", 64),
+        adapt_quad_scale=arch.get("son_adapt_quad_scale", 0.1),
+        adapt_quad_use_value_context=arch.get("son_adapt_quad_use_value_context", True),
     ).to(device)
 
 
@@ -128,16 +248,17 @@ def load_model(logs_root: Path, run_dir: str, model_dir: str, device: str, bench
     arch = config.get("model_architecture", {})
     data_cfg = config.get("dataset_structure", {})
 
+    resolved_arch = _resolve_arch_from_benchmarks(run_dir, model_dir, logs_root)
+    arch = {**resolved_arch, **arch}
+
     if model_dir.startswith("setonet"):
-        branch_head_type = "quadrature" if "quadrature" in model_dir else "standard"
-        model = _create_setonet(arch, branch_head_type, device)
-    elif model_dir == "deeponet":
-        model = _create_deeponet(arch, data_cfg, device)
-    elif model_dir == "vidon":
-        model = _create_vidon(arch, device)
-    else:
-        print(f"  Warning: Unknown model dir {model_dir}")
-        return None
+        variant_defaults = _infer_setonet_variant_defaults(model_dir)
+        for key, value in variant_defaults.items():
+            arch.setdefault(key, value)
+        arch.setdefault("son_quad_phi_activation", _default_quad_phi_activation(run_dir))
+        arch.setdefault("son_quad_value_mode", "linear_u")
+        if "use_positional_encoding" not in arch:
+            arch["use_positional_encoding"] = arch.get("pos_encoding_type", "sinusoidal") != "skip"
 
     ckpt_name = _resolve_ckpt_name(bench_cfg, model_dir)
     if not ckpt_name:
@@ -153,6 +274,17 @@ def load_model(logs_root: Path, run_dir: str, model_dir: str, device: str, bench
         ckpt_path = pth_files[0]
 
     state_dict = torch.load(ckpt_path, map_location=device)
+    if model_dir.startswith("setonet"):
+        arch.setdefault("son_branch_head_type", infer_setonet_branch_head_type(state_dict))
+        model = _create_setonet(arch, device)
+    elif model_dir == "deeponet":
+        model = _create_deeponet(arch, data_cfg, device)
+    elif model_dir == "vidon":
+        model = _create_vidon(arch, device)
+    else:
+        print(f"  Warning: Unknown model dir {model_dir}")
+        return None
+
     model.load_state_dict(state_dict)
     model.eval()
     print(f"  Loaded {model_dir} from {ckpt_path.name}")
