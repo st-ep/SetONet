@@ -276,7 +276,7 @@ def main():
     
     setonet_model.eval()
     test_data = dataset['test']
-    n_test = min(100, len(test_data))
+    n_test = min(args.n_test_samples_eval, len(test_data))
     total_loss = 0.0
     total_rel_error = 0.0
     

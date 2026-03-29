@@ -20,12 +20,16 @@ class QuadratureHead(nn.Module):
     Unlike attention pooling over sensors, φ_k(x_i) does not normalize over sensors
     (so refining the sensor set can converge to a continuum integral when weights
     correspond to quadrature cell volumes).
+
+    When n_tokens != p, the head first pools q = n_tokens internal tokens and then
+    applies a learned linear projection from q to the trunk width p.
     """
 
     def __init__(
         self,
         *,
         p: int,
+        n_tokens: int | None = None,
         dx_enc: int,
         du: int,
         dout: int,
@@ -44,6 +48,7 @@ class QuadratureHead(nn.Module):
         super().__init__()
 
         self.p = int(p)
+        self.n_tokens = self.p if n_tokens is None else int(n_tokens)
         self.dk = int(dk)
         self.dv = int(dv)
         self.dout = int(dout)
@@ -53,6 +58,10 @@ class QuadratureHead(nn.Module):
         self.phi_activation = phi_activation.lower()
         self.value_mode = value_mode.lower()
 
+        if self.p <= 0:
+            raise ValueError(f"p must be positive, got {p}")
+        if self.n_tokens <= 0:
+            raise ValueError(f"n_tokens must be positive, got {n_tokens}")
         if self.normalize not in ["none", "total", "token"]:
             raise ValueError(f"normalize must be 'none', 'total', or 'token', got {normalize}")
         if self.phi_activation not in ["tanh", "softsign", "softplus"]:
@@ -100,8 +109,9 @@ class QuadratureHead(nn.Module):
             )
             self._value_includes_x = True
 
-        # Learnable query tokens (test functions)
-        self.query_tokens = nn.Parameter(torch.randn(1, p, dk))
+        # Learnable internal query tokens (test functions). By default n_tokens == p,
+        # which preserves the historical SetONet quadrature path exactly.
+        self.query_tokens = nn.Parameter(torch.randn(1, self.n_tokens, dk))
 
         # Optional learnable temperature (softness of φ_k activation)
         if self.learn_temperature:
@@ -118,6 +128,13 @@ class QuadratureHead(nn.Module):
                 activation_fn(),
                 nn.Linear(hidden, dout),
             )
+        )
+
+        # Optional projection from internal token count q to trunk width p.
+        self.token_projection = (
+            None
+            if self.n_tokens == self.p
+            else nn.Linear(self.n_tokens, self.p, bias=False)
         )
 
     def forward(
@@ -165,20 +182,20 @@ class QuadratureHead(nn.Module):
             V = self.value_net(u)  # (B, N, dv)
 
         # 2) Token parameters
-        Q = self.query_tokens.expand(batch_size, -1, -1)  # (B, p, dk)
+        Q = self.query_tokens.expand(batch_size, -1, -1)  # (B, q, dk)
 
         # 3) Scores and test function evaluation φ_k(x_i) >= 0
-        scores = torch.einsum("bpk,bnk->bpn", Q, K) / math.sqrt(self.dk)  # (B, p, N)
+        scores = torch.einsum("bpk,bnk->bpn", Q, K) / math.sqrt(self.dk)  # (B, q, N)
         if self.learn_temperature:
             tau = torch.exp(self.log_tau) + self.eps
             scores = scores / tau
 
         if self.phi_activation == "tanh":
-            Phi = torch.tanh(scores)  # (B, p, N)
+            Phi = torch.tanh(scores)  # (B, q, N)
         elif self.phi_activation == "softsign":
-            Phi = scores / (1.0 + scores.abs())  # (B, p, N)
+            Phi = scores / (1.0 + scores.abs())  # (B, q, N)
         else:
-            Phi = F.softplus(scores)  # (B, p, N)
+            Phi = F.softplus(scores)  # (B, q, N)
 
         # 4) Quadrature weights and mask
         if sensor_weights is None:
@@ -193,18 +210,22 @@ class QuadratureHead(nn.Module):
             Phi = Phi * m.unsqueeze(1)
 
         # 5) Quadrature sum: Σ_i w_i φ_k(x_i) V_i
-        pooled = torch.einsum("bpn,bn,bnd->bpd", Phi, w, V)  # (B, p, dv)
+        pooled = torch.einsum("bpn,bn,bnd->bpd", Phi, w, V)  # (B, q, dv)
 
         # 6) Optional normalization
         if self.normalize == "total":
             denom = w.sum(dim=1).clamp_min(self.eps)  # (B,)
             pooled = pooled / denom.view(batch_size, 1, 1)
         elif self.normalize == "token":
-            mass = torch.einsum("bpn,bn->bp", Phi, w).clamp_min(self.eps)  # (B, p)
+            mass = torch.einsum("bpn,bn->bp", Phi, w).clamp_min(self.eps)  # (B, q)
             pooled = pooled / mass.unsqueeze(-1)
         elif self.normalize == "none":
             pass
         else:
             raise ValueError(f"Unknown normalize option: {self.normalize}")
 
-        return self.rho_token(pooled)  # (B, p, dout)
+        b = self.rho_token(pooled)  # (B, q, dout)
+        if self.token_projection is not None:
+            b = self.token_projection(b.transpose(1, 2)).transpose(1, 2)
+
+        return b  # (B, p, dout)

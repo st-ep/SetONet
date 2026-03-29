@@ -31,7 +31,7 @@ class SetONet(torch.nn.Module):
                  encoding_strategy='concatenate', # Strategy for combining positional and sensor features. Only 'concatenate' is supported.
                  aggregation_type: str = "attention",  # 'mean' or 'attention'
                  attention_n_tokens: int = 1,     # k – number of learnable query tokens
-	                 branch_head_type: str = "standard",  # "standard" | "petrov_attention" | "galerkin_pou" | "quadrature" | "adaptive_quadrature"
+                 branch_head_type: str = "standard",  # "standard" | "petrov_attention" | "galerkin_pou" | "quadrature" | "adaptive_quadrature"
                  pg_dk: int = None,  # key/query dim (default = phi_output_size)
                  pg_dv: int = None,  # value dim (default = phi_output_size)
                  pg_use_softmax: bool = True,  # only softmax supported for now
@@ -43,17 +43,18 @@ class SetONet(torch.nn.Module):
                  galerkin_learn_temperature: bool = False,  # Learn temperature parameter for Galerkin PoU softmax
                  quad_dk: int = None,  # Quadrature head key/query dim (default = phi_output_size)
                  quad_dv: int = None,  # Quadrature head value dim (default = phi_output_size)
+                 quad_n_tokens: int | None = None,  # Quadrature head internal token count (default = p)
                  quad_key_hidden: int | None = None,  # Quadrature key MLP hidden width (default = rho_hidden_size)
                  quad_key_layers: int = 3,  # Quadrature key MLP depth (>=2)
-	                 quad_phi_activation: str = "tanh",  # Quadrature Phi activation: "tanh" | "softsign" | "softplus"
+                 quad_phi_activation: str = "tanh",  # Quadrature Phi activation: "tanh" | "softsign" | "softplus"
                  quad_value_mode: str = "linear_u",  # Quadrature value net: "linear_u" | "mlp_u" | "mlp_xu"
                  quad_normalize: str = "total",  # Quadrature normalization: "none" | "total" | "token"
                  quad_learn_temperature: bool = False,  # Learn temperature parameter for quadrature test functions
                  adapt_quad_rank: int = 4,  # Low-rank adaptation rank R for adaptive_quadrature
-	                 adapt_quad_hidden: int | None = 64,  # Hidden dim for the adapter MLP (None -> infer)
-	                 adapt_quad_scale: float = 0.1,  # Tanh-bounded adapter scale
-	                 adapt_quad_use_value_context: bool = True,  # Only value-based context supported
-	                 ):
+                 adapt_quad_hidden: int | None = 64,  # Hidden dim for the adapter MLP (None -> infer)
+                 adapt_quad_scale: float = 0.1,  # Tanh-bounded adapter scale
+                 adapt_quad_use_value_context: bool = True,  # Only value-based context supported
+                 ):
         super().__init__()
 
         # set hyperparameters
@@ -233,6 +234,7 @@ class SetONet(torch.nn.Module):
             dv = quad_dv if quad_dv is not None else self.phi_output_size
             self.quadrature_head = QuadratureHead(
                 p=self.p,
+                n_tokens=quad_n_tokens,
                 dx_enc=dx_enc,
                 du=self.output_size_src,
                 dout=self.output_size_tgt,

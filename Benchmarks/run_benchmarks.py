@@ -24,7 +24,7 @@ import yaml
 from benchmark_utils import (
     DEEPONET_SCRIPTS, MODEL_VARIANTS, SETONET_SCRIPTS, VIDON_SCRIPTS,
     Job, aggregate_results, generate_all_configs, generate_param_table,
-    load_benchmark_config, run_jobs_parallel,
+    load_benchmark_config, resolve_job_checkpoint, run_jobs_parallel,
 )
 
 
@@ -93,7 +93,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", "-n", action="store_true", help="Show jobs without executing")
     p.add_argument("--check-run", action="store_true", help="Quick test run with 10 epochs per job")
     p.add_argument("--reaggregate", action="store_true", help="Re-aggregate results from existing logs only")
-    p.add_argument("--regen-plots", action="store_true", help="Regenerate plots only (load existing models, skip training)")
+    p.add_argument("--regen-plots", action="store_true", help="Reevaluate existing checkpoints and regenerate plots only (skip training)")
     p.add_argument("--seeds", help="Override seeds (comma-separated)")
     p.add_argument("--benchmarks", help="Override benchmarks (comma-separated)")
     p.add_argument("--models", choices=["setonet", "deeponet", "vidon", "all"], help="Filter models by base type")
@@ -192,21 +192,19 @@ def main():
 
     # Apply regen-plots mode: find existing models and set load_model_path
     if args.regen_plots:
-        logging.info("REGEN PLOTS: Loading existing models, skipping training")
+        logging.info("REGEN PLOTS: Loading existing checkpoints, skipping training")
         valid_jobs = []
         for job in jobs:
-            # Find model file in expected location
-            job_log_dir = logs_all_dir / job.benchmark / job.model / f"seed_{job.seed}"
-            model_files = list(job_log_dir.glob("*.pth")) if job_log_dir.exists() else []
-            if model_files:
-                job.overrides["load_model_path"] = str(model_files[0])
+            checkpoint_path = resolve_job_checkpoint(job, logs_all_dir)
+            if checkpoint_path:
+                job.overrides["load_model_path"] = str(checkpoint_path)
                 valid_jobs.append(job)
-                logging.debug(f"Found model for {job.job_id}: {model_files[0]}")
+                logging.debug(f"Found checkpoint for {job.job_id}: {checkpoint_path}")
             else:
-                logging.warning(f"No model found for {job.job_id}, skipping")
+                logging.warning(f"No checkpoint found for {job.job_id}, skipping")
         jobs = valid_jobs
         if not jobs:
-            print("No existing models found to regenerate plots for.")
+            print("No existing checkpoints found to reevaluate.")
             sys.exit(0)
 
     # Use custom output dir or default logs_all
@@ -220,7 +218,7 @@ def main():
 
     if args.dry_run:
         if args.regen_plots:
-            mode = "REGEN PLOTS (load models, skip training)"
+            mode = "REGEN PLOTS (load checkpoints, skip training)"
         elif args.check_run:
             mode = "CHECK RUN (10 epochs)"
         else:

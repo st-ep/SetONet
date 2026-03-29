@@ -245,9 +245,11 @@ def main():
     print(f"Model parameters: {total_params:,}")
     
     # Load pre-trained model if specified
+    model_was_loaded = False
     if args.load_model_path:
         print(f"Loading pre-trained model from: {args.load_model_path}")
         model.load_state_dict(torch.load(args.load_model_path, map_location=device))
+        model_was_loaded = True
     
     # Setup TensorBoard callback if enabled
     callback = None
@@ -267,14 +269,16 @@ def main():
         print(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
     
     # Train model
-    print(f"\nStarting training for {args.don_epochs} epochs...")
-    
-    model.train_model(
-        dataset=elastic_dataset,
-        epochs=args.don_epochs,
-        progress_bar=True,
-        callback=callback
-    )
+    if not model_was_loaded:
+        print(f"\nStarting training for {args.don_epochs} epochs...")
+        model.train_model(
+            dataset=elastic_dataset,
+            epochs=args.don_epochs,
+            progress_bar=True,
+            callback=callback
+        )
+    else:
+        print("\nDeepONet Elastic 2D model loaded. Skipping training.")
     
     # Evaluate model
     print("\nEvaluating model...")
@@ -310,9 +314,10 @@ def main():
     save_experiment_configuration(args, model, dataset, elastic_dataset, device, log_dir, dataset_type="elastic_2d", test_results=test_results)
     
     # Save model
-    model_save_path = os.path.join(log_dir, "elastic2d_deeponet_model.pth")
-    torch.save(model.state_dict(), model_save_path)
-    print(f"Model saved to: {model_save_path}")
+    if not model_was_loaded:
+        model_save_path = os.path.join(log_dir, "elastic2d_deeponet_model.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved to: {model_save_path}")
     print("Training completed!")
 
 if __name__ == "__main__":

@@ -71,6 +71,7 @@ def parse_arguments():
     parser.add_argument('--enable_tensorboard', action='store_true', default=True, help='Enable TensorBoard logging of training metrics')
     parser.add_argument('--tb_eval_frequency', type=int, default=1000, help='How often to evaluate on test set for TensorBoard logging (in steps)')
     parser.add_argument('--tb_test_samples', type=int, default=100, help='Number of test samples to use for TensorBoard evaluation')
+    parser.add_argument('--n_test_samples_eval', type=int, default=1000, help='Number of test samples to use for final evaluation')
     
     # Logging directory (overrides default if provided)
     parser.add_argument('--log_dir', type=str, default=None, help='Custom log directory (overrides default timestamped dir)')
@@ -262,13 +263,19 @@ def main():
     
     # Evaluate model
     print("\nEvaluating model...")
-    avg_loss, avg_rel_error = evaluate_model(model, dataset, concentration_dataset, device, n_test_samples=100)
+    avg_loss, avg_rel_error = evaluate_model(
+        model,
+        dataset,
+        concentration_dataset,
+        device,
+        n_test_samples=args.n_test_samples_eval,
+    )
     
     # Prepare test results for configuration saving
     test_results = {
         "relative_l2_error": avg_rel_error,
         "mse_loss": avg_loss,
-        "n_test_samples": 100
+        "n_test_samples": min(args.n_test_samples_eval, len(dataset['test']))
     }
     
     # Plot results
@@ -298,4 +305,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
